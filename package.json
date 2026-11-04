@@ -1,0 +1,21 @@
+{
+  "name": "campusvote-agent-ai",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node --env-file-if-exists=.env src/node/server.js",
+    "test": "node --test",
+    "lint": "node --check src/node/server.js && node --check src/node/config.js && node --check src/node/context.js && node --check src/node/errors.js && node --check src/node/replay-store.js && node --check src/node/backend-adapter.js"
+  },
+  "dependencies": {
+    "express": "^5.1.0",
+    "ioredis": "^5.8.2",
+    "jsonwebtoken": "^9.0.2",
+    "undici": "^7.16.0",
+    "zod": "^4.1.12"
+  }
+}

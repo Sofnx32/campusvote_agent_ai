@@ -1,0 +1,31 @@
+services:
+  agent-node:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    env_file:
+      - path: .env
+        required: false
+    ports:
+      - "3000:3000"
+    depends_on:
+      - redis
+      - agent-python
+  agent-python:
+    build:
+      context: .
+      dockerfile: src/python/Dockerfile
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      NODE_TOOLS_URL: http://agent-node:3000
+    ports:
+      - "8000:8000"
+  redis:
+    image: redis:7-alpine
+    command: redis-server --appendonly yes
+    volumes:
+      - agent-redis:/data
+volumes:
+  agent-redis:

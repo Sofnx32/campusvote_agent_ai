@@ -1,0 +1,15 @@
+.env
+.env.*
+!.env.example
+keys/
+node_modules/
+__pycache__/
+.pytest_cache/
+.venv/
+dist/
+coverage/
+*.log
+
+# Documentation kept locally and excluded from this repository.
+*.md
+docs/
