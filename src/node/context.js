@@ -43,6 +43,7 @@ export const signContext = (actor, correlationId, deadlineAt) => {
       iss: config.issuer,
       aud: config.audience,
       sub: actor.userId,
+      jti,
       role: actor.role,
       scope_level: actor.scopeLevel,
       organization_id: actor.organizationId,
