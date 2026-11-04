@@ -10,12 +10,38 @@ import { BackendAdapter } from './backend-adapter.js';
 
 assertProductionConfiguration();
 const app = express();
+app.use((req, res, next) => {
+  const origin = req.get('origin');
+  if (origin && config.allowedOrigins.includes(origin)) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Vary', 'Origin');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Correlation-Id');
+    res.setHeader('Access-Control-Allow-Methods', 'POST, GET, OPTIONS');
+  }
+  if (req.method === 'OPTIONS') return res.sendStatus(origin && config.allowedOrigins.includes(origin) ? 204 : 403);
+  return next();
+});
 app.use(express.json({ limit: '64kb' }));
 const replay = await ReplayStore.create();
 const backend = new BackendAdapter();
 const activeRequests = new Set();
 const userTokens = new Map();
-const tools = new Set(['getSiteOverview', 'getSiteFairs', 'getSiteProjects', 'getSiteStands', 'getSiteResults']);
+const tools = new Set([
+  'getSiteOverview',
+  'getSiteFairs',
+  'getSiteProjects',
+  'getSiteStands',
+  'getSiteResults',
+  'createFairRubric',
+  'addFairRubricCriterion',
+  'createFair',
+  'updateFair',
+  'changeFairStatus',
+  'listFairStands',
+  'createFairStand',
+  'updateFairStand',
+  'deleteFairStand',
+]);
 const httpsDispatcher = config.mtlsRequired ? new UndiciAgent({
   connect: {
     ca: fs.readFileSync(config.mtlsCaPath),

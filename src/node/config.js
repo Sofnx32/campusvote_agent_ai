@@ -18,6 +18,10 @@ const readKey = (path, name, requiredInProduction = true) => {
 export const config = Object.freeze({
   nodeEnv: process.env.NODE_ENV || 'development',
   port: Number(process.env.PORT || 3000),
+  allowedOrigins: (process.env.FRONTEND_ORIGINS || 'http://localhost:5173')
+    .split(',')
+    .map((origin) => origin.trim())
+    .filter(Boolean),
   pythonUrl: required('PYTHON_SERVICE_URL', process.env.PYTHON_SERVICE_URL || 'http://127.0.0.1:8000'),
   serviceToken: required('AI_SERVICE_TOKEN', process.env.AI_SERVICE_TOKEN || 'development-token-change-me'),
   mtlsRequired: process.env.AI_MTLS_REQUIRED === 'true',
@@ -43,12 +47,22 @@ export const config = Object.freeze({
   backendAuthMode: process.env.CAMPUSVOTE_AUTH_MODE || 'user_jwt',
   requireScopedToolEnvelope: process.env.CAMPUSVOTE_TOOL_RESPONSE_ENVELOPE_REQUIRED !== 'false',
   verifySitePath: process.env.CAMPUSVOTE_VERIFY_SITE_PATH || '',
+  verifyFairPath: process.env.CAMPUSVOTE_VERIFY_FAIR_PATH || '',
   toolPaths: {
     getSiteOverview: process.env.TOOL_GET_SITE_OVERVIEW_PATH || '',
     getSiteFairs: process.env.TOOL_GET_SITE_FAIRS_PATH || '',
     getSiteProjects: process.env.TOOL_GET_SITE_PROJECTS_PATH || '',
     getSiteStands: process.env.TOOL_GET_SITE_STANDS_PATH || '',
     getSiteResults: process.env.TOOL_GET_SITE_RESULTS_PATH || '',
+    createFairRubric: process.env.TOOL_CREATE_FAIR_RUBRIC_PATH || '',
+    addFairRubricCriterion: process.env.TOOL_ADD_FAIR_RUBRIC_CRITERION_PATH || '',
+    createFair: process.env.TOOL_CREATE_FAIR_PATH || '',
+    updateFair: process.env.TOOL_UPDATE_FAIR_PATH || '',
+    changeFairStatus: process.env.TOOL_CHANGE_FAIR_STATUS_PATH || '',
+    listFairStands: process.env.TOOL_LIST_FAIR_STANDS_PATH || '',
+    createFairStand: process.env.TOOL_CREATE_FAIR_STAND_PATH || '',
+    updateFairStand: process.env.TOOL_UPDATE_FAIR_STAND_PATH || '',
+    deleteFairStand: process.env.TOOL_DELETE_FAIR_STAND_PATH || '',
   },
   toolMethods: {
     getSiteOverview: process.env.TOOL_GET_SITE_OVERVIEW_METHOD || 'GET',
@@ -56,6 +70,15 @@ export const config = Object.freeze({
     getSiteProjects: process.env.TOOL_GET_SITE_PROJECTS_METHOD || 'GET',
     getSiteStands: process.env.TOOL_GET_SITE_STANDS_METHOD || 'GET',
     getSiteResults: process.env.TOOL_GET_SITE_RESULTS_METHOD || 'GET',
+    createFairRubric: process.env.TOOL_CREATE_FAIR_RUBRIC_METHOD || 'POST',
+    addFairRubricCriterion: process.env.TOOL_ADD_FAIR_RUBRIC_CRITERION_METHOD || 'POST',
+    createFair: process.env.TOOL_CREATE_FAIR_METHOD || 'POST',
+    updateFair: process.env.TOOL_UPDATE_FAIR_METHOD || 'PUT',
+    changeFairStatus: process.env.TOOL_CHANGE_FAIR_STATUS_METHOD || 'POST',
+    listFairStands: process.env.TOOL_LIST_FAIR_STANDS_METHOD || 'GET',
+    createFairStand: process.env.TOOL_CREATE_FAIR_STAND_METHOD || 'POST',
+    updateFairStand: process.env.TOOL_UPDATE_FAIR_STAND_METHOD || 'PUT',
+    deleteFairStand: process.env.TOOL_DELETE_FAIR_STAND_METHOD || 'DELETE',
   },
 });
 
