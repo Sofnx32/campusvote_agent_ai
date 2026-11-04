@@ -125,8 +125,9 @@ app.post('/internal/ai/v1/tools/:tool', async (req, res) => {
     await replay.reserveTool(context.jti, req.body.tool_call_id, config.maxToolCalls);
     const userToken = userTokens.get(context.jti);
     if (!userToken) throw new AgentError('AI_CONTEXT_REPLAYED', 'Original authenticated request is no longer active', 409);
+    const input = { ...(req.body?.input ?? {}), site_id: siteId };
     await withTimeout(config.toolTimeoutMs, async (signal) => backend.assertActiveAssignment(context, siteId, userToken, signal));
-    const data = await withTimeout(config.toolTimeoutMs, async (signal) => backend.callTool(req.params.tool, { site_id: siteId }, context, userToken, signal));
+    const data = await withTimeout(config.toolTimeoutMs, async (signal) => backend.callTool(req.params.tool, input, context, userToken, signal));
     res.json({ success: true, data, meta: { tool: req.params.tool, correlation_id: correlationId, truncated: false, resource_refs: [] } });
   } catch (error) {
     handleError(error, correlationId, res);

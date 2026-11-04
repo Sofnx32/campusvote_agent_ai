@@ -18,7 +18,9 @@ export class BackendAdapter {
     const path = config.verifySitePath
       .replace(':userId', encodeURIComponent(context.sub))
       .replace(':siteId', encodeURIComponent(siteId));
-    const response = await this.fetch(new URL(path, config.backendUrl), {
+    const verifyUrl = new URL(path, config.backendUrl);
+    verifyUrl.searchParams.set('site_id', siteId);
+    const response = await this.fetch(verifyUrl, {
       headers: this.headers(context, userToken),
       signal,
     });
@@ -147,7 +149,7 @@ export class BackendAdapter {
     const result = await response.json();
     const fair = result.data ?? result;
     const fairOrganizationId = fair.organization_id ?? fair.organizationId;
-    const fairSiteId = fair.site_id ?? fair.siteId;
+    const fairSiteId = fair.site_id ?? fair.siteId ?? fair.site?.id;
     if (
       fairOrganizationId !== context.organization_id ||
       fairSiteId !== siteId ||
