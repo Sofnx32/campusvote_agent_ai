@@ -5,10 +5,16 @@ const required = (name, value) => {
   return value;
 };
 
+const normalizeKey = (value) => (value.includes('\\n') ? value.replace(/\\n/g, '\n') : value);
+
+// Accepts either inline key material (preferred on hosts without persistent
+// disks, e.g. `<NAME>` env var) or a file path (`<NAME>_PATH`).
 const readKey = (path, name, requiredInProduction = true) => {
+  const inline = process.env[name];
+  if (inline) return normalizeKey(inline);
   if (!path) {
     if (requiredInProduction && process.env.NODE_ENV === 'production') {
-      throw new Error(`Missing required configuration: ${name}_PATH`);
+      throw new Error(`Missing required configuration: ${name} or ${name}_PATH`);
     }
     return null;
   }

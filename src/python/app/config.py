@@ -11,6 +11,7 @@ class Settings:
     mtls_cert_path: str = os.getenv("AI_MTLS_CERT_PATH", "")
     mtls_key_path: str = os.getenv("AI_MTLS_KEY_PATH", "")
     context_public_key_path: str = os.getenv("AI_CONTEXT_PUBLIC_KEY_PATH", "")
+    context_public_key: str = os.getenv("AI_CONTEXT_PUBLIC_KEY", "")
     context_issuer: str = os.getenv("AI_CONTEXT_ISSUER", "campusvote-api")
     context_audience: str = os.getenv("AI_CONTEXT_AUDIENCE", "campusvote-agent-ai")
     node_tools_url: str = os.getenv("NODE_TOOLS_URL", "http://127.0.0.1:3000")
@@ -25,6 +26,8 @@ class Settings:
     conversation_ttl_seconds: int = int(os.getenv("AI_CONVERSATION_TTL_SECONDS", "1800"))
 
     def public_key(self) -> str:
+        if self.context_public_key:
+            return self.context_public_key.replace("\\n", "\n")
         if not self.context_public_key_path:
             return ""
         with open(self.context_public_key_path, encoding="utf-8") as file:
