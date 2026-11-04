@@ -1,28 +1,58 @@
 import uuid
+import re
 import httpx
 
 from .config import settings
 from .errors import AgentError
 from .models import ToolCall
 
+WRITE_TOOLS = {
+    "createFairRubric",
+    "addFairRubricCriterion",
+    "createFair",
+    "updateFair",
+    "changeFairStatus",
+    "createFairStand",
+    "updateFairStand",
+    "deleteFairStand",
+}
+SENSITIVE_TOOLS = {"changeFairStatus", "deleteFairStand"}
+CONFIRMATION = re.compile(
+    r"\b(confirmo|confirmar|confirma|sí,\s*crear|si,\s*crear|adelante)\b",
+    re.IGNORECASE,
+)
 
-async def execute_tool(tool_call: ToolCall, context: dict) -> dict:
+async def execute_tool(tool_call: ToolCall, context: dict, user_message: str = "") -> dict:
     if tool_call.name not in {
         "getSiteOverview",
         "getSiteFairs",
         "getSiteProjects",
         "getSiteStands",
         "getSiteResults",
+        *WRITE_TOOLS,
+        "listFairStands",
     }:
         raise AgentError("AI_TOOL_NOT_FOUND", "Tool is not allowlisted", 404)
     site_id = tool_call.arguments.get("site_id")
     if not isinstance(site_id, str) or site_id not in context["site_ids"]:
         raise AgentError("AI_SCOPE_FORBIDDEN", "Site is not authorized", 403)
+    if tool_call.name in WRITE_TOOLS and not CONFIRMATION.search(user_message):
+        raise AgentError("AI_CONFIRMATION_REQUIRED", "Explicit confirmation is required before creating records", 409)
+    if tool_call.name in SENSITIVE_TOOLS and not re.search(
+        r"\b(confirmo dos veces|segunda confirmación|confirmo definitivamente)\b",
+        user_message,
+        re.IGNORECASE,
+    ):
+        raise AgentError(
+            "AI_DOUBLE_CONFIRMATION_REQUIRED",
+            "A second explicit confirmation is required for this sensitive action",
+            409,
+        )
     body = {
         "contract_version": "1.0",
         "correlation_id": context["correlation_id"],
         "tool_call_id": str(uuid.uuid4()),
-        "input": {"site_id": site_id},
+        "input": {key: value for key, value in tool_call.arguments.items() if key != "confirmed"},
     }
     try:
         client_kwargs = {"timeout": settings.tool_timeout_seconds}

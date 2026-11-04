@@ -1,3 +1,6 @@
+from __future__ import annotations
+
+
 from pydantic import BaseModel, Field
 
 
@@ -15,4 +18,3 @@ class ToolCall(BaseModel):
 class LLMResult(BaseModel):
     content: str | None = None
     tool_call: ToolCall | None = None
-

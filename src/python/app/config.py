@@ -21,6 +21,8 @@ class Settings:
     llm_timeout_seconds: float = float(os.getenv("LLM_TIMEOUT_SECONDS", "7"))
     max_tool_calls: int = int(os.getenv("AI_MAX_TOOL_CALLS", "5"))
     tool_timeout_seconds: float = float(os.getenv("AI_TOOL_TIMEOUT_SECONDS", "5"))
+    conversation_max_messages: int = int(os.getenv("AI_CONVERSATION_MAX_MESSAGES", "20"))
+    conversation_ttl_seconds: int = int(os.getenv("AI_CONVERSATION_TTL_SECONDS", "1800"))
 
     def public_key(self) -> str:
         if not self.context_public_key_path:

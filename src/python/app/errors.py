@@ -1,3 +1,6 @@
+from __future__ import annotations
+
+
 class AgentError(Exception):
     def __init__(self, code: str, message: str, status: int = 500, retryable: bool = False):
         super().__init__(message)
