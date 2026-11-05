@@ -7,7 +7,7 @@ import { AgentError, errorResponse } from './errors.js';
 import { extractBearer, verifyUser, validateActor, signContext, verifyContext } from './context.js';
 import { ReplayStore } from './replay-store.js';
 import { BackendAdapter } from './backend-adapter.js';
-import { fairActionScopeKey, operationDigest, isFairCancellation, isFairConfirmation, isFairResume, validateWriteProposal } from './fair-action.js';
+import { fairActionScopeKey, operationDigest, isFairCancellation, isFairConfirmation, isFairResume, preserveUploadedFairImage, validateWriteProposal } from './fair-action.js';
 
 assertProductionConfiguration();
 const app = express();
@@ -92,7 +92,8 @@ const operationLabels = {
 };
 const operationField = (name, value, tool) => ({
   name,
-  type: ['starts_at', 'ends_at', 'registration_deadline'].includes(name) ? 'date'
+  type: name === 'image_url' ? 'image'
+    : ['starts_at', 'ends_at', 'registration_deadline'].includes(name) ? 'date'
     : ['min_score', 'max_score', 'points', 'position'].includes(name) ? 'number'
       : name === 'description' ? 'textarea'
         : name === 'status' ? 'select' : 'text',
@@ -111,7 +112,14 @@ const operationField = (name, value, tool) => ({
 
 const pendingActionUi = (pendingAction, siteName) => {
   const proposal = pendingAction.proposal || {};
-  const fields = Object.entries(proposal)
+  const fields = pendingAction.tool === 'createFair' ? [
+    { name: 'name', type: 'text', label: 'Nombre', required: true, max_length: 200 },
+    { name: 'description', type: 'textarea', label: 'Descripción', required: false, max_length: 5000 },
+    { name: 'starts_at', type: 'date', label: 'Fecha de inicio', required: false },
+    { name: 'ends_at', type: 'date', label: 'Fecha de cierre', required: false },
+    { name: 'registration_deadline', type: 'date', label: 'Límite de registro de proyectos', required: false },
+    { name: 'image_url', type: 'image', label: 'Portada', required: true },
+  ] : Object.entries(proposal)
     .filter(([key]) => !key.endsWith('_id') && key !== 'site_id')
     .map(([key, value]) => operationField(key, value, pendingAction.tool));
   return {
@@ -238,6 +246,9 @@ app.post('/v1/chat', async (req, res) => {
     if (isFairConfirmation(req.body.message) && pendingAction &&
         pendingAction.userId === actor.userId && pendingAction.organizationId === actor.organizationId &&
         pendingAction.siteId === actor.siteId && pendingAction.digest === operationDigest(pendingAction.tool, pendingAction.proposal)) {
+      if (pendingAction.tool === 'createFair' && !pendingAction.proposal.image_url) {
+        throw new AgentError('AI_INVALID_REQUEST', 'Sube una portada de feria antes de confirmar', 409);
+      }
       if (req.body.operation_id && (req.body.operation_id !== pendingAction.operationId || req.body.operation_version !== pendingAction.version)) {
         throw new AgentError('AI_CONFIRMATION_REQUIRED', 'La operación cambió; revisa y confirma el resumen actualizado', 409);
       }
@@ -316,10 +327,13 @@ app.post('/internal/ai/v1/tools/:tool', async (req, res) => {
     const input = { ...(req.body?.input ?? {}), site_id: siteId };
     const writeTools = new Set(['createFair', 'createFairRubric', 'addFairRubricCriterion', 'createCategoryFairRubric', 'addCategoryFairRubricCriterion', 'createTeachingCriterion', 'updateTeachingCriterion', 'toggleTeachingCriterion', 'deleteTeachingCriterion', 'updateFair', 'changeFairStatus', 'createFairStand', 'updateFairStand', 'deleteFairStand']);
     if (writeTools.has(req.params.tool)) {
-      const proposal = validateWriteProposal(req.params.tool, input, context);
-      const digest = operationDigest(req.params.tool, proposal);
       const actionKey = fairActionScopeKey({ ...context, conversation_id: req.body?.conversation_id });
       const existing = await replay.getPendingAction(actionKey);
+      const trustedInput = req.params.tool === 'createFair'
+        ? preserveUploadedFairImage(input, existing?.tool === 'createFair' ? existing.proposal : null)
+        : input;
+      const proposal = validateWriteProposal(req.params.tool, trustedInput, context);
+      const digest = operationDigest(req.params.tool, proposal);
       const pending = existing?.digest === digest && existing.tool === req.params.tool
         ? existing
         : {

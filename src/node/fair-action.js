@@ -30,6 +30,12 @@ export const fairPayloadDigest = (input) => crypto.createHash('sha256')
   .digest('hex');
 export const operationDigest = (tool, proposal) => fairPayloadDigest({ tool, proposal });
 
+export const preserveUploadedFairImage = (input, currentProposal) => {
+  const { image_url: _modelImageUrl, ...fields } = input;
+  if (typeof currentProposal?.image_url === 'string') fields.image_url = currentProposal.image_url;
+  return fields;
+};
+
 export const validateWriteProposal = (tool, input, context) => {
   if (tool === 'createFair') return validateFairProposal(input, context);
   const contract = writeFields[tool];
@@ -69,7 +75,7 @@ export const validateFairProposal = (input, context) => {
   if (typeof input.name !== 'string' || input.name.trim().length < 3 || input.name.trim().length > 200) {
     throw new AgentError('AI_INVALID_REQUEST', 'Fair name must contain 3-200 characters', 400);
   }
-  if (typeof input.image_url !== 'string' || !/^https?:\/\//i.test(input.image_url)) {
+  if (input.image_url !== undefined && (typeof input.image_url !== 'string' || input.image_url.length > 1000 || !/^https?:\/\//i.test(input.image_url))) {
     throw new AgentError('AI_INVALID_REQUEST', 'A valid CampusVote image URL is required', 400);
   }
   for (const field of ['description', 'starts_at', 'ends_at', 'registration_deadline']) {

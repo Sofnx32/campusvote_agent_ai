@@ -76,9 +76,11 @@ def test_openai_compatible_success_and_ferias_tool_intent(monkeypatch):
     assert MockClient.request["json"]["model"] == "model-x"
 
 
-def test_create_fair_schema_requires_uploaded_cover_and_excludes_scope_ids():
+def test_create_fair_schema_leaves_cover_to_the_authenticated_upload_card():
     schema = llm.tool_schema("createFair")
-    assert schema["parameters"]["required"] == ["name", "image_url"]
+    assert schema["parameters"]["required"] == ["name"]
+    assert "image_url" in schema["parameters"]["properties"]
+    assert "No inventes image_url" in schema["description"]
     assert "site_id" not in schema["parameters"]["properties"]
     assert "organization_id" not in schema["parameters"]["properties"]
     assert schema["parameters"]["additionalProperties"] is False

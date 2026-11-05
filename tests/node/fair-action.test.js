@@ -8,6 +8,7 @@ import {
   isFairConfirmation,
   validateWriteProposal,
   validateFairProposal,
+  preserveUploadedFairImage,
 } from '../../src/node/fair-action.js';
 
 const context = { sub: 'user-a', organization_id: 'org-a', site_id: 'site-a', conversation_id: 'chat-a' };
@@ -30,7 +31,6 @@ test('validates and strips server-derived site data from fair proposal', () => {
 
 for (const [label, input, expected] of [
   ['missing name', { ...valid, name: '' }, 'AI_INVALID_REQUEST'],
-  ['missing uploaded image', { ...valid, image_url: undefined }, 'AI_INVALID_REQUEST'],
   ['invalid date', { ...valid, starts_at: 'tomorrowish' }, 'AI_INVALID_REQUEST'],
   ['date ordering', { ...valid, ends_at: '2027-04-01T00:00:00Z' }, 'AI_INVALID_REQUEST'],
   ['foreign site', { ...valid, site_id: 'site-b' }, 'AI_SCOPE_FORBIDDEN'],
@@ -73,6 +73,20 @@ test('validates rubric actions without accepting browser or model scope override
   assert.throws(() => validateWriteProposal('createFairRubric', {
     fair_id: 'fair-a', name: 'RÃºbrica base', site_id: 'site-b',
   }, context), (error) => error.code === 'AI_SCOPE_FORBIDDEN');
+});
+
+test('does not trust model-supplied fair image URLs and allows a proposal to wait for upload', () => {
+  const proposal = validateWriteProposal('createFair', preserveUploadedFairImage({
+    name: 'Feria tecnológica', image_url: 'https://attacker.example/fake.jpg', site_id: 'site-a',
+  }, null), context);
+  assert.equal(proposal.image_url, undefined);
+  assert.deepEqual(preserveUploadedFairImage({
+    name: 'Feria editada', image_url: 'https://model.example/inventada.png', site_id: 'site-a',
+  }, { image_url: 'https://campusvote.example/uploads/owned.png' }), {
+    name: 'Feria editada', site_id: 'site-a', image_url: 'https://campusvote.example/uploads/owned.png',
+  });
+  assert.throws(() => validateFairProposal({ ...valid, image_url: 'data:image/png;base64,abc' }, context),
+    (error) => error.code === 'AI_INVALID_REQUEST');
 });
 
 test('validates category rubric operations against their strict backend contracts', () => {

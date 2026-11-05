@@ -123,7 +123,7 @@ async def chat(
                 {"name": "starts_at", "type": "date", "label": "Inicio", "required": False},
                 {"name": "ends_at", "type": "date", "label": "Fin", "required": False},
                 {"name": "registration_deadline", "type": "date", "label": "Cierre de inscripción", "required": False},
-                {"name": "image_url", "type": "text", "label": "Portada subida a CampusVote", "required": True},
+                {"name": "image_url", "type": "image", "label": "Portada", "required": True},
             ]
             title = "Crear feria"
         else:
@@ -182,7 +182,11 @@ async def chat(
     return {
         "success": True,
         "conversation_id": payload.conversation_id,
-        "message": {"role": "assistant", "content": current.content[:4000]},
+        "message": {"role": "assistant", "content": (
+            "Revisa los datos de la feria en la tarjeta. Sube la portada desde aquí; podrás confirmar cuando esté lista."
+            if isinstance(last_action, dict) and last_action.get("status") == "confirmation_required" and last_action.get("tool") == "createFair"
+            else current.content[:4000]
+        )},
         "ui": ui,
         "operation": operation,
         "citations": [],

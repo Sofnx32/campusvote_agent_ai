@@ -85,7 +85,7 @@ class OpenAICompatibleProvider(LLMProvider):
                 "Puedes gestionar rubricas de evaluacion docente del dominio academico y rubricas de feria por categorias. "
                 "Para el dominio academico lista primero los criterios; al crear solo solicita nombre y descripcion. "
                 "No pidas UUIDs ni identificadores internos para modificar criterios; usa los registros del listado autorizado. "
-                "Para crear ferias, solicita nombre y una image_url de portada previamente subida a CampusVote. "
+                "Para crear ferias no solicites URLs de portada: la tarjeta de la operación permite subir el archivo a CampusVote. "
                 "Recopila fechas opcionales, muestra todos los datos y pregunta si confirma. "
                 "Llama createFair para proponer; el servidor valida confirmación y alcance antes de crear. "
                 "Si devuelve status confirmation_required, muestra todos los datos y pregunta si confirma; "
@@ -229,8 +229,8 @@ def tool_schema(name: str) -> dict:
             "ends_at": {"type": "string"},
             "registration_deadline": {"type": "string"},
         }
-        required = ["name", "image_url"]
-        description = "Propone o solicita crear una feria confirmada; la portada debe estar subida previamente a CampusVote."
+        required = ["name"]
+        description = "Prepara una propuesta de feria. No inventes image_url; la tarjeta permite subir la portada autenticadamente."
     elif name == "updateFair":
         properties = {
             "fair_id": {"type": "string"},
