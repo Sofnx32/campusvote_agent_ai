@@ -31,6 +31,51 @@ test('sends site_id when verifying the active assignment', async () => {
   assert.equal(requested.options.headers.authorization, 'Bearer user-token');
 });
 
+test('accepts CampusVote success envelope with nested scoped data', async () => {
+  const adapter = new BackendAdapter(async () => new Response(JSON.stringify({
+    success: true,
+    data: {
+      organization_id: 'org-1',
+      site_id: 'site-1',
+      data: { active: true, organization_id: 'org-1', site_id: 'site-1' },
+    },
+  }), { status: 200, headers: { 'content-type': 'application/json' } }));
+
+  await adapter.assertActiveAssignment(
+    { sub: 'user-1', organization_id: 'org-1', site_id: 'site-1' },
+    'site-1',
+    'user-token',
+    new AbortController().signal
+  );
+});
+
+for (const { active, organizationId, siteId, expected } of [
+  { active: false, organizationId: 'org-1', siteId: 'site-1', expected: 'AI_SITE_ASSIGNMENT_REQUIRED' },
+  { active: true, organizationId: 'org-2', siteId: 'site-1', expected: 'AI_ORGANIZATION_REQUIRED' },
+  { active: true, organizationId: 'org-1', siteId: 'site-missing', expected: 'AI_SCOPE_FORBIDDEN' },
+]) {
+  test(`rejects verification mismatch with ${expected}`, async () => {
+    const adapter = new BackendAdapter(async () => new Response(JSON.stringify({
+      success: true,
+      data: {
+        organization_id: organizationId,
+        site_id: siteId,
+        data: { active, organization_id: organizationId, site_id: siteId },
+      },
+    }), { status: 200, headers: { 'content-type': 'application/json' } }));
+
+    await assert.rejects(
+      () => adapter.assertActiveAssignment(
+        { sub: 'user-1', organization_id: 'org-1', site_id: 'site-1' },
+        'site-1',
+        'user-token',
+        new AbortController().signal
+      ),
+      (error) => error.code === expected
+    );
+  });
+}
+
 test('rejects a revoked or expired site assignment', async () => {
   const adapter = new BackendAdapter(async () => new Response(JSON.stringify({
     success: false,
@@ -61,7 +106,7 @@ test('rejects a site verifier response scoped to another organization', async ()
       'user-token',
       new AbortController().signal
     ),
-    (error) => error.code === 'AI_SCOPE_FORBIDDEN'
+    (error) => error.code === 'AI_ORGANIZATION_REQUIRED'
   );
 });
 

@@ -76,9 +76,16 @@ export class BackendAdapter {
       );
     }
     const result = await response.json();
-    const data = result.data ?? result;
+    const envelope = result.data ?? result;
+    const data = envelope.data ?? envelope;
     if (data.active !== true || data.organization_id !== context.organization_id || data.site_id !== siteId) {
-      throw new AgentError('AI_SCOPE_FORBIDDEN', 'Active site assignment is invalid', 403);
+      if (data.active !== true) {
+        throw new AgentError('AI_SITE_ASSIGNMENT_REQUIRED', 'The site assignment is inactive, expired, or missing', 403);
+      }
+      if (data.organization_id !== context.organization_id) {
+        throw new AgentError('AI_ORGANIZATION_REQUIRED', 'The site assignment belongs to another organization', 403);
+      }
+      throw new AgentError('AI_SCOPE_FORBIDDEN', 'The verified site does not match the assigned site', 403);
     }
   }
 
