@@ -16,7 +16,7 @@ class Settings:
     context_audience: str = os.getenv("AI_CONTEXT_AUDIENCE", "campusvote-agent-ai")
     node_tools_url: str = os.getenv("NODE_TOOLS_URL", "http://127.0.0.1:3000")
     llm_provider: str = os.getenv("LLM_PROVIDER", "openai-compatible")
-    llm_url: str = os.getenv("LLM_URL", "")
+    llm_url: str = os.getenv("LLM_URL", os.getenv("LLM_BASE_URL", ""))
     llm_model: str = os.getenv("LLM_MODEL", "")
     llm_api_key: str = os.getenv("LLM_API_KEY", "")
     llm_timeout_seconds: float = float(os.getenv("LLM_TIMEOUT_SECONDS", "7"))

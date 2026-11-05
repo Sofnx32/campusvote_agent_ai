@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 
 import httpx
@@ -25,6 +26,7 @@ TOOLS = [
     "updateFairStand",
     "deleteFairStand",
 ]
+logger = logging.getLogger(__name__)
 READ_TOOLS = set(TOOLS[:5] + ["listFairStands"])
 WRITE_TOOLS = set(TOOLS) - READ_TOOLS
 CONFIRMATION = re.compile(
@@ -60,8 +62,8 @@ class StaticProvider(LLMProvider):
 
 class OpenAICompatibleProvider(LLMProvider):
     async def complete(self, message, context, tool_results, history=None, allow_writes=False) -> LLMResult:
-        if not settings.llm_url or not settings.llm_model or not settings.llm_api_key:
-            raise AgentError("AI_LLM_UNAVAILABLE", "LLM provider is not configured", 503, True)
+        if not settings.llm_provider or not settings.llm_url or not settings.llm_model or not settings.llm_api_key:
+            raise AgentError("LLM_CONFIG_MISSING", "LLM provider configuration is incomplete", 503)
         messages = [{
             "role": "system",
             "content": (
@@ -96,12 +98,42 @@ class OpenAICompatibleProvider(LLMProvider):
                     json=payload,
                     headers={"Authorization": "Bearer " + settings.llm_api_key},
                 )
-                response.raise_for_status()
-                choice = response.json()["choices"][0]["message"]
+                if response.status_code >= 400:
+                    status = response.status_code
+                    if status in (401, 403):
+                        code, public_status = "LLM_AUTH_FAILED", 502
+                    elif status == 404:
+                        code, public_status = "LLM_MODEL_NOT_FOUND", 502
+                    elif status == 429:
+                        code, public_status = "LLM_RATE_LIMITED", 503
+                    else:
+                        code, public_status = "LLM_PROVIDER_UNAVAILABLE", 503
+                    logger.warning(
+                        "LLM request failed provider=%s model=%s status=%s cause=http_status",
+                        settings.llm_provider, settings.llm_model, status,
+                    )
+                    raise AgentError(code, "LLM provider request failed", public_status, status == 429 or status >= 500)
+                body = response.json()
+                choice = body["choices"][0]["message"]
+                if not isinstance(choice, dict):
+                    raise ValueError("message must be an object")
         except httpx.TimeoutException as error:
-            raise AgentError("AI_TOOL_TIMEOUT", "LLM timed out", 504, True) from error
-        except (httpx.HTTPError, KeyError, IndexError, TypeError, json.JSONDecodeError) as error:
-            raise AgentError("AI_LLM_UNAVAILABLE", "LLM provider unavailable", 503, True) from error
+            logger.warning("LLM request failed provider=%s model=%s cause=timeout", settings.llm_provider, settings.llm_model)
+            raise AgentError("LLM_PROVIDER_TIMEOUT", "LLM provider timed out", 504, True) from error
+        except AgentError:
+            raise
+        except httpx.RequestError as error:
+            logger.warning(
+                "LLM request failed provider=%s model=%s cause=%s",
+                settings.llm_provider, settings.llm_model, type(error).__name__,
+            )
+            raise AgentError("LLM_PROVIDER_UNAVAILABLE", "LLM provider is unavailable", 503, True) from error
+        except (KeyError, IndexError, TypeError, ValueError, json.JSONDecodeError) as error:
+            logger.warning(
+                "LLM response invalid provider=%s model=%s cause=%s",
+                settings.llm_provider, settings.llm_model, type(error).__name__,
+            )
+            raise AgentError("LLM_INVALID_RESPONSE", "LLM provider returned an invalid response", 502) from error
         tool_calls = choice.get("tool_calls") or []
         if tool_calls:
             function = tool_calls[0]["function"]
