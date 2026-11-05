@@ -16,8 +16,17 @@ TOOLS = [
     "getSiteProjects",
     "getSiteStands",
     "getSiteResults",
+    "listTeachingCriteria",
+    "createTeachingCriterion",
+    "updateTeachingCriterion",
+    "toggleTeachingCriterion",
+    "deleteTeachingCriterion",
+    "listFairCategories",
+    "listFairCategoryRubrics",
     "createFairRubric",
     "addFairRubricCriterion",
+    "createCategoryFairRubric",
+    "addCategoryFairRubricCriterion",
     "createFair",
     "updateFair",
     "changeFairStatus",
@@ -27,7 +36,7 @@ TOOLS = [
     "deleteFairStand",
 ]
 logger = logging.getLogger(__name__)
-READ_TOOLS = set(TOOLS[:5] + ["listFairStands"])
+READ_TOOLS = set(TOOLS[:5] + ["listFairStands", "listFairCategories", "listFairCategoryRubrics", "listTeachingCriteria"])
 WRITE_TOOLS = set(TOOLS) - READ_TOOLS
 CONFIRMATION = re.compile(
     r"\b(confirmo|confirmar|confirma|sí,\s*crear|si,\s*crear|adelante)\b",
@@ -73,6 +82,16 @@ class OpenAICompatibleProvider(LLMProvider):
                 "de sedes autorizadas. Nunca inventes datos, permisos ni resultados. Para crear una "
                 "rúbrica, recopila los datos, resume la propuesta y pide confirmación explícita. "
                 "Solo después de que el usuario diga que confirma puedes llamar herramientas de escritura. "
+                "Puedes gestionar rubricas de evaluacion docente del dominio academico y rubricas de feria por categorias. "
+                "Para el dominio academico lista primero los criterios; al crear solo solicita nombre y descripcion. "
+                "No pidas UUIDs ni identificadores internos para modificar criterios; usa los registros del listado autorizado. "
+                "Para crear ferias, solicita nombre y una image_url de portada previamente subida a CampusVote. "
+                "Recopila fechas opcionales, muestra todos los datos y pregunta si confirma. "
+                "Llama createFair para proponer; el servidor valida confirmación y alcance antes de crear. "
+                "Si devuelve status confirmation_required, muestra todos los datos y pregunta si confirma; "
+                "si devuelve status created, confirma con los datos devueltos por el backend. "
+                "No solicites organization_id, site_id, UUIDs ni períodos internos. "
+                "Si cambian los datos tras el resumen, presenta un resumen nuevo y pide confirmación otra vez. "
                 "Consultas y listados no requieren confirmación. "
                 f"{site_instructions(context)}"
             ),
@@ -86,11 +105,15 @@ class OpenAICompatibleProvider(LLMProvider):
             "tools": [
                 {"type": "function", "function": tool_schema(name)}
                 for name in TOOLS
-                if name in READ_TOOLS or (allow_writes and name in WRITE_TOOLS)
+                if name in READ_TOOLS or name == "createFair" or (allow_writes and name in WRITE_TOOLS)
             ],
         }
         if tool_results:
-            payload["messages"].append({"role": "tool", "content": json.dumps(tool_results, ensure_ascii=False)})
+            payload["messages"].append({
+                "role": "user",
+                "content": "Resultado de la herramienta autorizada. Úsalo para responder sin inventar datos: "
+                + json.dumps(tool_results, ensure_ascii=False),
+            })
         try:
             async with httpx.AsyncClient(timeout=settings.llm_timeout_seconds) as client:
                 response = await client.post(
@@ -146,7 +169,19 @@ class OpenAICompatibleProvider(LLMProvider):
 
 
 def tool_schema(name: str) -> dict:
-    if name == "createFairRubric":
+    if name == "createTeachingCriterion":
+        properties = {"name": {"type": "string"}, "description": {"type": "string"}}
+        required = ["name"]
+        description = "Creates a general teaching evaluation criterion for the active site after confirmation."
+    elif name == "updateTeachingCriterion":
+        properties = {"criterion_id": {"type": "string"}, "name": {"type": "string"}, "description": {"type": "string"}}
+        required = ["criterion_id"]
+        description = "Updates an existing site criterion after confirmation using its listed ID."
+    elif name in {"toggleTeachingCriterion", "deleteTeachingCriterion"}:
+        properties = {"criterion_id": {"type": "string"}}
+        required = ["criterion_id"]
+        description = "Changes the active state or deletes a teaching evaluation criterion after confirmation using its listed ID."
+    elif name == "createFairRubric":
         properties = {
             "fair_id": {"type": "string"},
             "name": {"type": "string"},
@@ -165,15 +200,37 @@ def tool_schema(name: str) -> dict:
         }
         required = ["fair_id", "name", "min_score", "max_score"]
         description = "Agrega un criterio confirmado a una rúbrica."
+    elif name == "createCategoryFairRubric":
+        properties = {
+            "fair_id": {"type": "string"},
+            "category_id": {"type": "string"},
+            "name": {"type": "string"},
+            "description": {"type": "string"},
+        }
+        required = ["fair_id", "category_id", "name"]
+        description = "Crea una rúbrica para una categoría de feria DRAFT después de confirmación."
+    elif name == "addCategoryFairRubricCriterion":
+        properties = {
+            "fair_id": {"type": "string"},
+            "category_id": {"type": "string"},
+            "name": {"type": "string"},
+            "description": {"type": "string"},
+            "points": {"type": "number"},
+            "position": {"type": "integer"},
+        }
+        required = ["fair_id", "category_id", "name", "points"]
+        description = "Agrega un criterio a una rúbrica de categoría; el backend limita la suma activa a 20 puntos."
     elif name == "createFair":
         properties = {
             "name": {"type": "string"},
             "description": {"type": "string"},
+            "image_url": {"type": "string"},
             "starts_at": {"type": "string"},
             "ends_at": {"type": "string"},
+            "registration_deadline": {"type": "string"},
         }
-        required = ["name"]
-        description = "Crea una feria en una sede autorizada, después de confirmación."
+        required = ["name", "image_url"]
+        description = "Propone o solicita crear una feria confirmada; la portada debe estar subida previamente a CampusVote."
     elif name == "updateFair":
         properties = {
             "fair_id": {"type": "string"},
@@ -195,6 +252,10 @@ def tool_schema(name: str) -> dict:
         properties = {"fair_id": {"type": "string"}}
         required = ["fair_id"]
         description = "Lista los stands de una feria autorizada."
+    elif name in {"listFairCategories", "listFairCategoryRubrics"}:
+        properties = {"fair_id": {"type": "string"}}
+        required = ["fair_id"]
+        description = "Consulta las categorías o rúbricas por categoría de una feria autorizada."
     elif name in {"createFairStand", "updateFairStand"}:
         properties = {
             "fair_id": {"type": "string"},
@@ -215,6 +276,10 @@ def tool_schema(name: str) -> dict:
         }
         required = ["fair_id", "stand_id"]
         description = "Elimina un stand; requiere confirmación reforzada."
+    elif name == "listTeachingCriteria":
+        properties = {}
+        required = []
+        description = "Lists teaching evaluation criteria configured for the active site."
     else:
         properties = {}
         required = []

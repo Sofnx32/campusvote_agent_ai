@@ -76,6 +76,14 @@ def test_openai_compatible_success_and_ferias_tool_intent(monkeypatch):
     assert MockClient.request["json"]["model"] == "model-x"
 
 
+def test_create_fair_schema_requires_uploaded_cover_and_excludes_scope_ids():
+    schema = llm.tool_schema("createFair")
+    assert schema["parameters"]["required"] == ["name", "image_url"]
+    assert "site_id" not in schema["parameters"]["properties"]
+    assert "organization_id" not in schema["parameters"]["properties"]
+    assert schema["parameters"]["additionalProperties"] is False
+
+
 @pytest.mark.parametrize("status,code", [
     (401, "LLM_AUTH_FAILED"),
     (403, "LLM_AUTH_FAILED"),

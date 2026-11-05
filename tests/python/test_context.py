@@ -81,21 +81,17 @@ def test_verify_context_requires_names_for_multiple_sites():
         object.__setattr__(settings, "context_public_key", previous)
 
 
-def test_verify_context_normalizes_authorized_site_names():
+def test_verify_context_accepts_signed_single_site_context():
     private_pem, public_pem = _key_pair()
     previous = settings.context_public_key
     object.__setattr__(settings, "context_public_key", public_pem)
     try:
         token = _signed_context(
-            _claims([
-                {"id": "site-a", "name": "  Sede\nCentral  "},
-                {"id": "site-b", "name": "Sede Norte"},
-            ]),
+            {**_claims([]), "site_id": "site-a", "site_name": "Sede Central"},
             private_pem,
         )
-        assert verify_context(token)["sites"] == [
-            {"id": "site-a", "name": "Sede Central"},
-            {"id": "site-b", "name": "Sede Norte"},
-        ]
+        claims = verify_context(token)
+        assert claims["site_id"] == "site-a"
+        assert claims["site_name"] == "Sede Central"
     finally:
         object.__setattr__(settings, "context_public_key", previous)

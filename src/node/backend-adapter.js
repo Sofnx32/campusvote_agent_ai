@@ -108,7 +108,9 @@ export class BackendAdapter {
     const url = new URL(
       path
         .replace(':fairId', encodeURIComponent(input.fair_id || ''))
+        .replace(':categoryId', encodeURIComponent(input.category_id || ''))
         .replace(':siteId', encodeURIComponent(input.site_id || ''))
+        .replace(':criterionId', encodeURIComponent(input.criterion_id || ''))
         .replace(':standId', encodeURIComponent(input.stand_id || '')),
       config.backendUrl
     );
@@ -116,17 +118,27 @@ export class BackendAdapter {
     const isWriteTool = [
       'createFairRubric',
       'addFairRubricCriterion',
+      'createCategoryFairRubric',
+      'addCategoryFairRubricCriterion',
       'createFair',
       'updateFair',
       'changeFairStatus',
       'createFairStand',
       'updateFairStand',
       'deleteFairStand',
+      'createTeachingCriterion',
+      'updateTeachingCriterion',
+      'toggleTeachingCriterion',
+      'deleteTeachingCriterion',
     ].includes(tool);
     const directFairTool = [
       'listFairStands',
+      'listFairCategories',
+      'listFairCategoryRubrics',
       'createFairRubric',
       'addFairRubricCriterion',
+      'createCategoryFairRubric',
+      'addCategoryFairRubricCriterion',
       'createFair',
       'updateFair',
       'changeFairStatus',
@@ -134,7 +146,17 @@ export class BackendAdapter {
       'updateFairStand',
       'deleteFairStand',
     ].includes(tool);
-    if ((isWriteTool && tool !== 'createFair') || tool === 'listFairStands') {
+    const fairScopedTool = [
+      'listFairStands', 'listFairCategories', 'listFairCategoryRubrics',
+      'createFairRubric', 'addFairRubricCriterion', 'createCategoryFairRubric',
+      'addCategoryFairRubricCriterion', 'updateFair', 'changeFairStatus',
+      'createFairStand', 'updateFairStand', 'deleteFairStand',
+    ].includes(tool);
+    const directAcademicTool = [
+      'listTeachingCriteria', 'createTeachingCriterion', 'updateTeachingCriterion',
+      'toggleTeachingCriterion', 'deleteTeachingCriterion',
+    ].includes(tool);
+    if (fairScopedTool) {
       await this.assertFairAssignment(input.fair_id, input.site_id, context, userToken, signal);
     }
     const headers = this.headers(context, userToken);
@@ -144,24 +166,43 @@ export class BackendAdapter {
       signal,
     };
     if (method === 'GET') {
-      if (!directFairTool) {
+      if (tool === 'listTeachingCriteria') {
+        url.searchParams.set('siteId', input.site_id);
+      } else if (!directFairTool) {
         url.searchParams.set('site_id', input.site_id);
         url.searchParams.set('organization_id', context.organization_id);
       }
     } else {
-      const { fair_id: _fairId, stand_id: _standId, ...body } = input;
+      const { fair_id: _fairId, category_id: _categoryId, stand_id: _standId, criterion_id: _criterionId, site_id: _siteId, ...body } = input;
+      if (['createTeachingCriterion', 'updateTeachingCriterion'].includes(tool) && tool === 'createTeachingCriterion') body.siteId = context.site_id;
+      if (tool === 'createFair' || tool === 'updateFair') body.site_id = context.site_id;
+      if (tool === 'updateTeachingCriterion' || tool === 'toggleTeachingCriterion' || tool === 'deleteTeachingCriterion') delete body.criterion_id;
       if (tool !== 'createFair' && tool !== 'updateFair') delete body.site_id;
       request.body = JSON.stringify(
-        directFairTool ? body : { ...body, organization_id: context.organization_id }
+        directFairTool || directAcademicTool ? body : { ...body, organization_id: context.organization_id }
       );
     }
     const response = await this.fetch(url, request);
     if (!response.ok) {
-      throw new AgentError('AI_TOOL_UNAVAILABLE', `${tool} backend service unavailable`, 503, true);
+      const payload = await response.json().catch(() => ({}));
+      const backendError = payload?.error ?? {};
+      if (response.status >= 500) {
+        throw new AgentError('AI_TOOL_UNAVAILABLE', `${tool} backend service unavailable`, 503, true);
+      }
+      const code = response.status === 403
+        ? 'AI_SCOPE_FORBIDDEN'
+        : response.status === 404
+          ? 'AI_RESOURCE_NOT_FOUND'
+          : response.status === 409
+            ? 'AI_OPERATION_CONFLICT'
+            : response.status === 400
+              ? 'AI_INVALID_REQUEST'
+              : 'AI_BACKEND_REJECTED';
+      throw new AgentError(code, backendError.message || `${tool} was rejected by CampusVote`, response.status);
     }
     const result = await response.json();
     const data = result.data ?? result;
-    if (config.requireScopedToolEnvelope && !isWriteTool && !directFairTool) {
+    if (config.requireScopedToolEnvelope && !isWriteTool && !directFairTool && !directAcademicTool) {
       if (data.organization_id !== context.organization_id || data.site_id !== input.site_id) {
         throw new AgentError('AI_TOOL_UNAVAILABLE', `${tool} does not provide a verified organization/site response envelope`, 503, true);
       }

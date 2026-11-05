@@ -7,6 +7,7 @@ import { AgentError, errorResponse } from './errors.js';
 import { extractBearer, verifyUser, validateActor, signContext, verifyContext } from './context.js';
 import { ReplayStore } from './replay-store.js';
 import { BackendAdapter } from './backend-adapter.js';
+import { fairActionScopeKey, operationDigest, isFairCancellation, isFairConfirmation, isFairResume, validateWriteProposal } from './fair-action.js';
 
 assertProductionConfiguration();
 const app = express();
@@ -32,8 +33,17 @@ const tools = new Set([
   'getSiteProjects',
   'getSiteStands',
   'getSiteResults',
+  'listTeachingCriteria',
+  'createTeachingCriterion',
+  'updateTeachingCriterion',
+  'toggleTeachingCriterion',
+  'deleteTeachingCriterion',
+  'listFairCategories',
+  'listFairCategoryRubrics',
   'createFairRubric',
   'addFairRubricCriterion',
+  'createCategoryFairRubric',
+  'addCategoryFairRubricCriterion',
   'createFair',
   'updateFair',
   'changeFairStatus',
@@ -57,6 +67,61 @@ const withTimeout = (ms, task) => {
   return Promise.resolve().then(() => task(controller.signal)).finally(() => clearTimeout(timer));
 };
 
+const operationTitles = {
+  createFair: 'Crear feria',
+  createTeachingCriterion: 'Crear criterio de evaluación docente',
+  updateTeachingCriterion: 'Actualizar criterio de evaluación docente',
+  toggleTeachingCriterion: 'Cambiar estado del criterio docente',
+  deleteTeachingCriterion: 'Eliminar criterio de evaluación docente',
+  createFairRubric: 'Crear rúbrica de feria',
+  addFairRubricCriterion: 'Agregar criterio a la rúbrica',
+  createCategoryFairRubric: 'Crear rúbrica por categoría',
+  addCategoryFairRubricCriterion: 'Agregar criterio por categoría',
+  updateFair: 'Actualizar feria',
+  changeFairStatus: 'Cambiar estado de feria',
+  createFairStand: 'Crear stand',
+  updateFairStand: 'Actualizar stand',
+  deleteFairStand: 'Eliminar stand',
+};
+const operationLabels = {
+  name: 'Nombre', description: 'Descripción', image_url: 'Portada', starts_at: 'Inicio',
+  ends_at: 'Fin', registration_deadline: 'Cierre de inscripción', min_score: 'Puntaje mínimo',
+  max_score: 'Puntaje máximo', points: 'Puntos', position: 'Posición', code: 'Código del stand',
+  status: 'Estado',
+  career_id: 'Carrera',
+};
+const operationField = (name, value, tool) => ({
+  name,
+  type: ['starts_at', 'ends_at', 'registration_deadline'].includes(name) ? 'date'
+    : ['min_score', 'max_score', 'points', 'position'].includes(name) ? 'number'
+      : name === 'description' ? 'textarea'
+        : name === 'status' ? 'select' : 'text',
+  label: operationLabels[name] || name.replaceAll('_', ' '),
+  required: (tool === 'createFair' && ['name', 'image_url'].includes(name)) ||
+    (tool === 'createCategoryFairRubric' && name === 'name') ||
+    (tool === 'addCategoryFairRubricCriterion' && ['name', 'points'].includes(name)) ||
+    (tool === 'createFairRubric' && name === 'name') ||
+    (tool === 'addFairRubricCriterion' && ['name', 'min_score', 'max_score'].includes(name)) ||
+    (tool === 'createFairStand' && name === 'code'),
+  ...(name === 'description' ? { max_length: 5000 } : {}),
+  ...(name === 'name' ? { max_length: tool === 'createFair' ? 200 : 255 } : {}),
+  ...(name === 'status' ? { options: ['DRAFT', 'OPEN', 'CLOSED'].map((status) => ({ value: status, label: status })) } : {}),
+  ...(name === 'image_url' && typeof value === 'string' ? {} : {}),
+});
+
+const pendingActionUi = (pendingAction, siteName) => {
+  const proposal = pendingAction.proposal || {};
+  const fields = Object.entries(proposal)
+    .filter(([key]) => !key.endsWith('_id') && key !== 'site_id')
+    .map(([key, value]) => operationField(key, value, pendingAction.tool));
+  return {
+    type: 'confirmation',
+    schema: { title: operationTitles[pendingAction.tool] || 'Revisar operación', fields },
+    data: { ...Object.fromEntries(Object.entries(proposal).filter(([key]) => !key.endsWith('_id') && key !== 'site_id')), site_name: siteName },
+    actions: ['confirm', 'edit', 'cancel'],
+  };
+};
+
 const requireServiceToken = (req) => {
   if (req.get('authorization') !== `Bearer ${config.serviceToken}`) throw new AgentError('AI_SERVICE_UNAUTHORIZED', 'Invalid service token', 401);
 };
@@ -70,6 +135,7 @@ app.get('/health', (_req, res) => res.json({ success: true, service: 'campusvote
 
 app.post('/v1/chat', async (req, res) => {
   const correlationId = req.get('X-Correlation-Id') || req.body?.correlation_id || crypto.randomUUID();
+  const conversationId = req.body?.conversation_id || crypto.randomUUID();
   try {
     const userToken = extractBearer(req.get('authorization'));
     const userClaims = verifyUser(userToken);
@@ -84,6 +150,120 @@ app.post('/v1/chat', async (req, res) => {
     const tokenUserId = userClaims.userId ?? userClaims.sub;
     if (!tokenUserId || tokenUserId !== actor.userId) {
       throw new AgentError('AI_CONTEXT_INVALID', 'User token does not match the resolved administrator', 401);
+    }
+    const conversationScope = fairActionScopeKey({ sub: actor.userId, organization_id: actor.organizationId, site_id: actor.siteId, conversation_id: conversationId });
+    const pendingAction = await replay.getPendingAction(conversationScope);
+    if ((req.body.operation_id || req.body.operation_version !== undefined) &&
+        (!pendingAction || req.body.operation_id !== pendingAction.operationId || req.body.operation_version !== pendingAction.version)) {
+      throw new AgentError('AI_CONFIRMATION_REQUIRED', 'La operación cambió o ya venció', 409);
+    }
+    if (req.body.operation_intent && (!pendingAction || req.body.operation_id !== pendingAction.operationId || req.body.operation_version !== pendingAction.version)) {
+      throw new AgentError('AI_CONFIRMATION_REQUIRED', 'La operación cambió o ya venció', 409);
+    }
+    if (req.body.operation_intent === 'update' && pendingAction) {
+      if (pendingAction.userId !== actor.userId || pendingAction.organizationId !== actor.organizationId || pendingAction.siteId !== actor.siteId) {
+        throw new AgentError('AI_SCOPE_FORBIDDEN', 'La operación no pertenece a este contexto', 403);
+      }
+      const patch = req.body.operation_data;
+      if (!patch || typeof patch !== 'object' || Array.isArray(patch) || Object.keys(patch).some((key) => key.endsWith('_id') || key === 'site_id')) {
+        throw new AgentError('AI_INVALID_REQUEST', 'Los datos editados de la operación no son válidos', 400);
+      }
+      const editablePatch = {};
+      for (const [key, rawValue] of Object.entries(patch)) {
+        if (rawValue === '') continue;
+        const previousValue = pendingAction.proposal[key];
+        if (typeof previousValue === 'number') {
+          const numericValue = typeof rawValue === 'number' ? rawValue : Number(rawValue);
+          if (!Number.isFinite(numericValue)) throw new AgentError('AI_INVALID_REQUEST', `El campo ${key} debe ser numérico`, 400);
+          editablePatch[key] = numericValue;
+        } else {
+          editablePatch[key] = rawValue;
+        }
+      }
+      const proposalInput = { ...pendingAction.proposal, ...editablePatch };
+      for (const key of Object.keys(patch)) if (patch[key] === '') delete proposalInput[key];
+      const proposal = validateWriteProposal(pendingAction.tool, { ...proposalInput, site_id: actor.siteId }, {
+        sub: actor.userId, organization_id: actor.organizationId, site_id: actor.siteId,
+      });
+      const updated = {
+        ...pendingAction,
+        proposal,
+        digest: operationDigest(pendingAction.tool, proposal),
+        version: pendingAction.version + 1,
+      };
+      await replay.setPendingAction(conversationScope, updated);
+      return res.json({
+        success: true,
+        conversation_id: conversationId,
+        message: { role: 'assistant', content: 'Actualicé la propuesta. Revisa el resumen y confirma para continuar.' },
+        ui: pendingActionUi(updated, actor.siteName),
+        operation: { id: updated.operationId, version: updated.version, status: 'awaiting_confirmation' },
+        citations: [], suggested_actions: [], meta: { correlation_id: correlationId, tool_calls: 0, truncated: false },
+      });
+    }
+    if (isFairCancellation(req.body.message)) {
+      if (req.body.operation_id && (!pendingAction || req.body.operation_id !== pendingAction.operationId || req.body.operation_version !== pendingAction.version)) {
+        throw new AgentError('AI_CONFIRMATION_REQUIRED', 'La operación cambió o ya venció', 409);
+      }
+      await replay.clearPendingAction(conversationScope);
+      return res.json({
+        success: true,
+        conversation_id: conversationId,
+        message: { role: 'assistant', content: pendingAction ? `Se canceló la operación “${operationTitles[pendingAction.tool] || 'pendiente'}”. No se realizaron cambios.` : 'No hay una operación pendiente.' },
+        ui: { type: 'message', schema: null, data: null, actions: [] },
+        operation: pendingAction ? { id: pendingAction.operationId, version: pendingAction.version, status: 'cancelled' } : null,
+        citations: [], suggested_actions: [],
+        meta: { correlation_id: correlationId, tool_calls: 0, truncated: false },
+      });
+    }
+    if (isFairResume(req.body.message) && pendingAction) {
+      return res.json({
+        success: true,
+        conversation_id: conversationId,
+        message: { role: 'assistant', content: 'Esta es la propuesta pendiente. Puedes editarla, confirmarla o cancelarla.' },
+        ui: pendingActionUi(pendingAction, actor.siteName),
+        operation: { id: pendingAction.operationId, version: pendingAction.version, status: 'awaiting_confirmation' },
+        citations: [], suggested_actions: [], meta: { correlation_id: correlationId, tool_calls: 0, truncated: false },
+      });
+    }
+    if (isFairResume(req.body.message)) {
+      return res.json({
+        success: true,
+        conversation_id: conversationId,
+        message: { role: 'assistant', content: 'No hay una operación pendiente en esta conversación; pudo haber vencido o haberse cancelado.' },
+        ui: { type: 'error', schema: null, data: null, actions: [] }, operation: null,
+        citations: [], suggested_actions: [], meta: { correlation_id: correlationId, tool_calls: 0, truncated: false },
+      });
+    }
+    if (isFairConfirmation(req.body.message) && pendingAction &&
+        pendingAction.userId === actor.userId && pendingAction.organizationId === actor.organizationId &&
+        pendingAction.siteId === actor.siteId && pendingAction.digest === operationDigest(pendingAction.tool, pendingAction.proposal)) {
+      if (req.body.operation_id && (req.body.operation_id !== pendingAction.operationId || req.body.operation_version !== pendingAction.version)) {
+        throw new AgentError('AI_CONFIRMATION_REQUIRED', 'La operación cambió; revisa y confirma el resumen actualizado', 409);
+      }
+      if (!await replay.consumePendingAction(conversationScope, pendingAction.digest)) {
+        throw new AgentError('AI_CONFIRMATION_REQUIRED', 'La confirmación ya se usó o venció', 409);
+      }
+      await withTimeout(config.toolTimeoutMs, async (signal) => backend.assertActiveAssignment(
+        { sub: actor.userId, organization_id: actor.organizationId, site_id: actor.siteId },
+        actor.siteId,
+        userToken,
+        signal
+      ));
+      const fair = await withTimeout(config.toolTimeoutMs, async (signal) => backend.callTool(
+        pendingAction.tool, { ...pendingAction.proposal, site_id: actor.siteId },
+        { sub: actor.userId, organization_id: actor.organizationId, site_id: actor.siteId },
+        userToken,
+        signal
+      ));
+      return res.json({
+        success: true,
+        conversation_id: conversationId,
+        message: { role: 'assistant', content: `${operationTitles[pendingAction.tool] || 'La operación'} se completó correctamente en CampusVote.` },
+        ui: { type: 'success', schema: null, data: fair, actions: [] },
+        operation: { id: pendingAction.operationId, version: pendingAction.version, status: 'completed' },
+        citations: [], suggested_actions: [], meta: { correlation_id: correlationId, tool_calls: 1, truncated: false },
+      });
     }
     const deadlineAt = new Date(Date.now() + config.chatTimeoutMs).toISOString();
     const context = signContext(actor, correlationId, deadlineAt);
@@ -101,7 +281,7 @@ app.post('/v1/chat', async (req, res) => {
             'X-AI-Context': context.token,
             'X-Correlation-Id': correlationId,
           },
-          body: JSON.stringify({ message: req.body.message, conversation_id: req.body.conversation_id || null, correlation_id: correlationId }),
+          body: JSON.stringify({ message: req.body.message, conversation_id: conversationId, correlation_id: correlationId }),
           dispatcher: httpsDispatcher,
           signal,
         });
@@ -134,6 +314,28 @@ app.post('/internal/ai/v1/tools/:tool', async (req, res) => {
     const userToken = userTokens.get(context.jti);
     if (!userToken) throw new AgentError('AI_CONTEXT_REPLAYED', 'Original authenticated request is no longer active', 409);
     const input = { ...(req.body?.input ?? {}), site_id: siteId };
+    const writeTools = new Set(['createFair', 'createFairRubric', 'addFairRubricCriterion', 'createCategoryFairRubric', 'addCategoryFairRubricCriterion', 'createTeachingCriterion', 'updateTeachingCriterion', 'toggleTeachingCriterion', 'deleteTeachingCriterion', 'updateFair', 'changeFairStatus', 'createFairStand', 'updateFairStand', 'deleteFairStand']);
+    if (writeTools.has(req.params.tool)) {
+      const proposal = validateWriteProposal(req.params.tool, input, context);
+      const digest = operationDigest(req.params.tool, proposal);
+      const actionKey = fairActionScopeKey({ ...context, conversation_id: req.body?.conversation_id });
+      const existing = await replay.getPendingAction(actionKey);
+      const pending = existing?.digest === digest && existing.tool === req.params.tool
+        ? existing
+        : {
+          digest,
+          proposal,
+          tool: req.params.tool,
+          operationId: existing?.operationId || crypto.randomUUID(),
+          version: (existing?.version || 0) + 1,
+          userId: context.sub,
+          organizationId: context.organization_id,
+          siteId: context.site_id,
+        };
+      await replay.setPendingAction(actionKey, pending);
+      res.json({ success: true, data: { status: 'confirmation_required', operation_id: pending.operationId, version: pending.version, tool: pending.tool, proposal, site_name: context.site_name } });
+      return;
+    }
     await withTimeout(config.toolTimeoutMs, async (signal) => backend.assertActiveAssignment(context, siteId, userToken, signal));
     const data = await withTimeout(config.toolTimeoutMs, async (signal) => backend.callTool(req.params.tool, input, context, userToken, signal));
     res.json({ success: true, data, meta: { tool: req.params.tool, correlation_id: correlationId, truncated: false, resource_refs: [] } });

@@ -3,6 +3,8 @@ import { config } from './config.js';
 import { AgentError } from './errors.js';
 
 const memory = new Map();
+const pendingActions = new Map();
+const ACTION_TTL_SECONDS = 600;
 const now = () => Date.now();
 
 const purge = (key) => {
@@ -11,8 +13,9 @@ const purge = (key) => {
 };
 
 export class ReplayStore {
-  constructor(redis = null) {
+  constructor(redis = null, clock = now) {
     this.redis = redis;
+    this.clock = clock;
   }
 
   static async create() {
@@ -93,5 +96,53 @@ export class ReplayStore {
     }
     const entry = memory.get(jti);
     if (entry) entry.request_open = false;
+  }
+
+  async setPendingAction(key, value) {
+    const storageKey = `ai:pending-action:${key}`;
+    if (this.redis) {
+      await this.redis.set(storageKey, JSON.stringify(value), 'EX', ACTION_TTL_SECONDS);
+      return;
+    }
+    pendingActions.set(key, { value, expiresAt: this.clock() + ACTION_TTL_SECONDS * 1000 });
+  }
+
+  async getPendingAction(key) {
+    if (this.redis) {
+      const value = await this.redis.get(`ai:pending-action:${key}`);
+      return value ? JSON.parse(value) : null;
+    }
+    const entry = pendingActions.get(key);
+    if (!entry || entry.expiresAt <= this.clock()) {
+      pendingActions.delete(key);
+      return null;
+    }
+    return entry.value;
+  }
+
+  async consumePendingAction(key, expectedDigest) {
+    if (this.redis) {
+      const script = `
+        local value = redis.call('GET', KEYS[1])
+        if not value then return 'missing' end
+        local decoded = cjson.decode(value)
+        if decoded.digest ~= ARGV[1] then return 'mismatch' end
+        redis.call('DEL', KEYS[1])
+        return 'ok'
+      `;
+      return await this.redis.eval(script, 1, `ai:pending-action:${key}`, expectedDigest) === 'ok';
+    }
+    const entry = await this.getPendingAction(key);
+    if (!entry || entry.digest !== expectedDigest) return false;
+    pendingActions.delete(key);
+    return true;
+  }
+
+  async clearPendingAction(key) {
+    if (this.redis) {
+      await this.redis.del(`ai:pending-action:${key}`);
+      return;
+    }
+    pendingActions.delete(key);
   }
 }

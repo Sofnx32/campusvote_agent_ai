@@ -9,14 +9,19 @@ from .models import ToolCall
 WRITE_TOOLS = {
     "createFairRubric",
     "addFairRubricCriterion",
+    "createCategoryFairRubric",
+    "addCategoryFairRubricCriterion",
     "createFair",
     "updateFair",
     "changeFairStatus",
     "createFairStand",
     "updateFairStand",
     "deleteFairStand",
+    "createTeachingCriterion",
+    "updateTeachingCriterion",
+    "toggleTeachingCriterion",
+    "deleteTeachingCriterion",
 }
-SENSITIVE_TOOLS = {"changeFairStatus", "deleteFairStand"}
 CONFIRMATION = re.compile(
     r"\b(confirmo|confirmar|confirma|sí,\s*crear|si,\s*crear|adelante)\b",
     re.IGNORECASE,
@@ -31,23 +36,16 @@ async def execute_tool(tool_call: ToolCall, context: dict, user_message: str = "
         "getSiteResults",
         *WRITE_TOOLS,
         "listFairStands",
+        "listFairCategories",
+        "listFairCategoryRubrics",
+        "listTeachingCriteria",
     }:
         raise AgentError("AI_TOOL_NOT_FOUND", "Tool is not allowlisted", 404)
     site_id = context.get("site_id")
     if not isinstance(site_id, str) or not site_id:
         raise AgentError("AI_SITE_ASSIGNMENT_REQUIRED", "The administrator has no active site assignment", 403)
-    if tool_call.name in WRITE_TOOLS and not CONFIRMATION.search(user_message):
+    if tool_call.name in WRITE_TOOLS - {"createFair"} and not CONFIRMATION.search(user_message):
         raise AgentError("AI_CONFIRMATION_REQUIRED", "Explicit confirmation is required before creating records", 409)
-    if tool_call.name in SENSITIVE_TOOLS and not re.search(
-        r"\b(confirmo dos veces|segunda confirmación|confirmo definitivamente)\b",
-        user_message,
-        re.IGNORECASE,
-    ):
-        raise AgentError(
-            "AI_DOUBLE_CONFIRMATION_REQUIRED",
-            "A second explicit confirmation is required for this sensitive action",
-            409,
-        )
     scope_arguments = {
         "site_id",
         "siteId",
@@ -71,6 +69,8 @@ async def execute_tool(tool_call: ToolCall, context: dict, user_message: str = "
         "correlation_id": context["correlation_id"],
         "tool_call_id": str(uuid.uuid4()),
         "input": input_payload,
+        "user_message": user_message,
+        "conversation_id": context.get("conversation_id"),
     }
     try:
         client_kwargs = {"timeout": settings.tool_timeout_seconds}
