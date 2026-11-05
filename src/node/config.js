@@ -52,6 +52,7 @@ export const config = Object.freeze({
   backendUrl: process.env.CAMPUSVOTE_BACKEND_URL || '',
   backendAuthMode: process.env.CAMPUSVOTE_AUTH_MODE || 'user_jwt',
   requireScopedToolEnvelope: process.env.CAMPUSVOTE_TOOL_RESPONSE_ENVELOPE_REQUIRED !== 'false',
+  resolveContextPath: process.env.CAMPUSVOTE_RESOLVE_CONTEXT_PATH || '/api/internal/ai/site/context',
   verifySitePath: process.env.CAMPUSVOTE_VERIFY_SITE_PATH || '',
   verifyFairPath: process.env.CAMPUSVOTE_VERIFY_FAIR_PATH || '',
   toolPaths: {

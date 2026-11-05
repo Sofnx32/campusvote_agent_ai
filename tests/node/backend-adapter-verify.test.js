@@ -31,6 +31,40 @@ test('sends site_id when verifying the active assignment', async () => {
   assert.equal(requested.options.headers.authorization, 'Bearer user-token');
 });
 
+test('rejects a revoked or expired site assignment', async () => {
+  const adapter = new BackendAdapter(async () => new Response(JSON.stringify({
+    success: false,
+    error: { code: 'FORBIDDEN', message: 'La sede no estǭ asignada activamente' },
+  }), { status: 403, headers: { 'content-type': 'application/json' } }));
+
+  await assert.rejects(
+    () => adapter.assertActiveAssignment(
+      { sub: 'user-1', organization_id: 'org-1', site_ids: ['site-1'] },
+      'site-1',
+      'user-token',
+      new AbortController().signal
+    ),
+    (error) => error.code === 'AI_SCOPE_FORBIDDEN'
+  );
+});
+
+test('rejects a site verifier response scoped to another organization', async () => {
+  const adapter = new BackendAdapter(async () => new Response(JSON.stringify({
+    success: true,
+    data: { active: true, organization_id: 'org-2', site_id: 'site-1' },
+  }), { status: 200, headers: { 'content-type': 'application/json' } }));
+
+  await assert.rejects(
+    () => adapter.assertActiveAssignment(
+      { sub: 'user-1', organization_id: 'org-1', site_ids: ['site-1'] },
+      'site-1',
+      'user-token',
+      new AbortController().signal
+    ),
+    (error) => error.code === 'AI_SCOPE_FORBIDDEN'
+  );
+});
+
 test('accepts fair scope when the backend exposes the site as site.id', async () => {
   const adapter = new BackendAdapter(async () => new Response(JSON.stringify({
     success: true,

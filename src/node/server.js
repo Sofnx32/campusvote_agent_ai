@@ -71,14 +71,22 @@ app.get('/health', (_req, res) => res.json({ success: true, service: 'campusvote
 app.post('/v1/chat', async (req, res) => {
   const correlationId = req.get('X-Correlation-Id') || req.body?.correlation_id || crypto.randomUUID();
   try {
-    const userClaims = verifyUser(extractBearer(req.get('authorization')));
-    const actor = validateActor(userClaims);
+    const userToken = extractBearer(req.get('authorization'));
+    const userClaims = verifyUser(userToken);
     const correlation = req.body?.correlation_id;
     if (correlation && correlation !== correlationId) throw new AgentError('AI_INVALID_REQUEST', 'Correlation id mismatch', 400);
     if (typeof req.body?.message !== 'string' || req.body.message.length < 1 || req.body.message.length > 4000) throw new AgentError('AI_INVALID_REQUEST', 'Message must contain 1-4000 characters', 400);
+    const resolvedActor = await withTimeout(
+      config.toolTimeoutMs,
+      async (signal) => backend.resolveActorContext(userToken, signal)
+    );
+    const actor = validateActor(resolvedActor);
+    const tokenUserId = userClaims.userId ?? userClaims.sub;
+    if (!tokenUserId || tokenUserId !== actor.userId) {
+      throw new AgentError('AI_CONTEXT_INVALID', 'User token does not match the resolved administrator', 401);
+    }
     const deadlineAt = new Date(Date.now() + config.chatTimeoutMs).toISOString();
     const context = signContext(actor, correlationId, deadlineAt);
-    const userToken = extractBearer(req.get('authorization'));
     await replay.setIssued(context.jti, { correlationId, deadlineAt, userId: actor.userId });
     await replay.consume(context.jti, { correlationId });
     userTokens.set(context.jti, userToken);

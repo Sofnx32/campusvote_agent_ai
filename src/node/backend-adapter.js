@@ -8,6 +8,48 @@ export class BackendAdapter {
     this.fetch = fetchImpl;
   }
 
+  async resolveActorContext(userToken, signal) {
+    if (!config.backendUrl || !config.resolveContextPath) {
+      throw new AgentError('AI_TOOL_UNAVAILABLE', 'Site context resolver is not configured', 503, true);
+    }
+    if (config.backendAuthMode !== 'user_jwt' || !userToken) {
+      throw new AgentError('AI_TOOL_UNAVAILABLE', 'CampusVote authentication mode is not configured', 503, true);
+    }
+    const response = await this.fetch(new URL(config.resolveContextPath, config.backendUrl), {
+      headers: { authorization: `Bearer ${userToken}` },
+      signal,
+    });
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({}));
+      const code = payload?.error?.code;
+      const message = payload?.error?.message;
+      if (response.status === 401) {
+        throw new AgentError('AI_SERVICE_UNAUTHORIZED', 'User session is no longer valid', 401);
+      }
+      if (response.status === 403) {
+        if (code === 'AI_ORGANIZATION_REQUIRED' || code === 'AI_SITE_ASSIGNMENT_REQUIRED') {
+          throw new AgentError(code, message || 'The administrator is not assigned to a site', 403);
+        }
+        throw new AgentError('AI_SCOPE_FORBIDDEN', message || 'Only ADMIN SITE is allowed', 403);
+      }
+      throw new AgentError(
+        'AI_TOOL_UNAVAILABLE',
+        'Site context could not be resolved',
+        503,
+        response.status >= 500
+      );
+    }
+    const payload = await response.json();
+    const data = payload.data ?? payload;
+    return {
+      userId: data.user_id ?? data.userId ?? data.id,
+      role: data.role,
+      scopeLevel: data.scope_level ?? data.scopeLevel,
+      organizationId: data.organization_id ?? data.organizationId,
+      siteIds: data.site_ids ?? data.siteIds,
+    };
+  }
+
   async assertActiveAssignment(context, siteId, userToken, signal) {
     if (!context.site_ids.includes(siteId)) {
       throw new AgentError('AI_SCOPE_FORBIDDEN', 'Site is not assigned to this administrator', 403);

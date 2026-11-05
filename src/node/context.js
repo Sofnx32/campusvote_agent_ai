@@ -21,16 +21,35 @@ export const verifyUser = (token) => {
   }
 };
 
-export const validateActor = (claims) => {
-  if (!allowedRoles.has(claims.role) || claims.scopeLevel !== 'SITE' && claims.scope_level !== 'SITE') {
+export const validateActor = (actor) => {
+  const role = actor?.role;
+  const scopeLevel = actor?.scopeLevel ?? actor?.scope_level;
+  if (!allowedRoles.has(role) || scopeLevel !== 'SITE') {
     throw new AgentError('AI_SCOPE_FORBIDDEN', 'Only ADMIN SITE is allowed', 403);
   }
-  const organizationId = claims.organizationId || claims.organization_id;
-  const siteIds = claims.siteIds || claims.site_ids;
-  if (!organizationId || !Array.isArray(siteIds) || siteIds.length === 0) {
-    throw new AgentError('AI_CONTEXT_INVALID', 'organizationId and active site assignments are required', 401);
+  const userId = actor.userId ?? actor.user_id ?? actor.id ?? actor.sub;
+  if (!userId) {
+    throw new AgentError('AI_CONTEXT_INVALID', 'Authenticated administrator could not be identified', 401);
   }
-  return { userId: claims.sub || claims.userId, role: 'ADMIN', scopeLevel: 'SITE', organizationId, siteIds };
+  const organizationId = actor.organizationId ?? actor.organization_id;
+  if (!organizationId) {
+    throw new AgentError('AI_ORGANIZATION_REQUIRED', 'The administrator does not belong to an organization', 403);
+  }
+  const rawSiteIds = actor.siteIds ?? actor.site_ids;
+  if (
+    !Array.isArray(rawSiteIds) ||
+    rawSiteIds.length === 0 ||
+    rawSiteIds.some((siteId) => typeof siteId !== 'string' || siteId.length === 0)
+  ) {
+    throw new AgentError('AI_SITE_ASSIGNMENT_REQUIRED', 'The administrator has no active site assignments', 403);
+  }
+  return {
+    userId,
+    role: 'ADMIN',
+    scopeLevel: 'SITE',
+    organizationId,
+    siteIds: [...new Set(rawSiteIds)],
+  };
 };
 
 export const signContext = (actor, correlationId, deadlineAt) => {
