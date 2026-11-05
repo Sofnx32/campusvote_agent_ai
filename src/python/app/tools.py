@@ -33,9 +33,9 @@ async def execute_tool(tool_call: ToolCall, context: dict, user_message: str = "
         "listFairStands",
     }:
         raise AgentError("AI_TOOL_NOT_FOUND", "Tool is not allowlisted", 404)
-    site_id = tool_call.arguments.get("site_id")
-    if not isinstance(site_id, str) or site_id not in context["site_ids"]:
-        raise AgentError("AI_SCOPE_FORBIDDEN", "Site is not authorized", 403)
+    site_id = context.get("site_id")
+    if not isinstance(site_id, str) or not site_id:
+        raise AgentError("AI_SITE_ASSIGNMENT_REQUIRED", "The administrator has no active site assignment", 403)
     if tool_call.name in WRITE_TOOLS and not CONFIRMATION.search(user_message):
         raise AgentError("AI_CONFIRMATION_REQUIRED", "Explicit confirmation is required before creating records", 409)
     if tool_call.name in SENSITIVE_TOOLS and not re.search(
@@ -48,11 +48,29 @@ async def execute_tool(tool_call: ToolCall, context: dict, user_message: str = "
             "A second explicit confirmation is required for this sensitive action",
             409,
         )
+    scope_arguments = {
+        "site_id",
+        "siteId",
+        "organization_id",
+        "organizationId",
+        "role",
+        "scope_level",
+        "scopeLevel",
+        "user_id",
+        "userId",
+        "confirmed",
+    }
+    input_payload = {
+        key: value
+        for key, value in tool_call.arguments.items()
+        if key not in scope_arguments
+    }
+    input_payload["site_id"] = site_id
     body = {
         "contract_version": "1.0",
         "correlation_id": context["correlation_id"],
         "tool_call_id": str(uuid.uuid4()),
-        "input": {key: value for key, value in tool_call.arguments.items() if key != "confirmed"},
+        "input": input_payload,
     }
     try:
         client_kwargs = {"timeout": settings.tool_timeout_seconds}

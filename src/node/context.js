@@ -35,20 +35,33 @@ export const validateActor = (actor) => {
   if (!organizationId) {
     throw new AgentError('AI_ORGANIZATION_REQUIRED', 'The administrator does not belong to an organization', 403);
   }
+  const rawSiteId = actor.siteId ?? actor.site_id;
   const rawSiteIds = actor.siteIds ?? actor.site_ids;
-  if (
-    !Array.isArray(rawSiteIds) ||
-    rawSiteIds.length === 0 ||
-    rawSiteIds.some((siteId) => typeof siteId !== 'string' || siteId.length === 0)
-  ) {
-    throw new AgentError('AI_SITE_ASSIGNMENT_REQUIRED', 'The administrator has no active site assignments', 403);
+  const siteId = typeof rawSiteId === 'string'
+    ? rawSiteId
+    : Array.isArray(rawSiteIds) && rawSiteIds.length === 1
+      ? rawSiteIds[0]
+      : null;
+  if (!siteId || typeof siteId !== 'string') {
+    if (Array.isArray(rawSiteIds) && rawSiteIds.length === 0) {
+      throw new AgentError('AI_SITE_ASSIGNMENT_REQUIRED', 'The administrator has no active site assignment', 403);
+    }
+    if (Array.isArray(rawSiteIds) && rawSiteIds.length > 1) {
+      throw new AgentError('AI_SCOPE_FORBIDDEN', 'The administrator has more than one active site assignment', 403);
+    }
+    throw new AgentError('AI_SITE_ASSIGNMENT_REQUIRED', 'The administrator has no active site assignment', 403);
   }
   return {
     userId,
     role: 'ADMIN',
     scopeLevel: 'SITE',
     organizationId,
-    siteIds: [...new Set(rawSiteIds)],
+    siteId,
+    siteName: typeof actor.siteName === 'string'
+      ? actor.siteName.replace(/\s+/g, ' ').trim()
+      : typeof actor.site_name === 'string'
+        ? actor.site_name.replace(/\s+/g, ' ').trim()
+        : undefined,
   };
 };
 
@@ -66,7 +79,8 @@ export const signContext = (actor, correlationId, deadlineAt) => {
       role: actor.role,
       scope_level: actor.scopeLevel,
       organization_id: actor.organizationId,
-      site_ids: actor.siteIds,
+      site_id: actor.siteId,
+      site_name: actor.siteName,
       correlation_id: correlationId,
       deadline_at: deadlineAt,
       iat: nowSeconds,
@@ -93,7 +107,7 @@ export const verifyContext = (token, options = {}) => {
   } catch {
     throw new AgentError('AI_CONTEXT_INVALID', 'Invalid AI context', 401);
   }
-  if (claims.role !== 'ADMIN' || claims.scope_level !== 'SITE' || !claims.organization_id || !Array.isArray(claims.site_ids) || !claims.jti || !claims.correlation_id) {
+  if (claims.role !== 'ADMIN' || claims.scope_level !== 'SITE' || !claims.organization_id || typeof claims.site_id !== 'string' || !claims.jti || !claims.correlation_id) {
     throw new AgentError('AI_CONTEXT_INVALID', 'Incomplete AI context', 401);
   }
   if (Date.parse(claims.deadline_at) <= Date.now()) throw new AgentError('AI_DEADLINE_EXCEEDED', 'Request deadline exceeded', 504, true);

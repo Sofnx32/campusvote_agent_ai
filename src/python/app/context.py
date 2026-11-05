@@ -36,12 +36,22 @@ def verify_context(value: str | None) -> dict:
         claims.get("role") != "ADMIN"
         or claims.get("scope_level") != "SITE"
         or not claims.get("organization_id")
-        or not isinstance(claims.get("site_ids"), list)
-        or not claims.get("site_ids")
         or not claims.get("correlation_id")
         or not claims.get("deadline_at")
     ):
         raise AgentError("AI_CONTEXT_INVALID", "Incomplete AI context", 401)
+    site_id = claims.get("site_id")
+    if not isinstance(site_id, str) or not site_id:
+        legacy_site_ids = claims.get("site_ids")
+        if isinstance(legacy_site_ids, list) and len(legacy_site_ids) == 1:
+            site_id = legacy_site_ids[0]
+        elif isinstance(legacy_site_ids, list) and len(legacy_site_ids) > 1:
+            raise AgentError("AI_CONTEXT_INVALID", "The administrator has more than one active site", 401)
+    if not isinstance(site_id, str) or not site_id:
+        raise AgentError("AI_SITE_ASSIGNMENT_REQUIRED", "The administrator has no active site assignment", 403)
+    claims["site_id"] = site_id
+    if "site_name" in claims and not isinstance(claims["site_name"], str):
+        raise AgentError("AI_CONTEXT_INVALID", "Invalid site description", 401)
     try:
         deadline = datetime.fromisoformat(claims["deadline_at"].replace("Z", "+00:00"))
     except ValueError as error:

@@ -14,7 +14,14 @@ const { signContext, verifyContext } = await import('../../src/node/context.js')
 
 test('signContext includes the jti claim required by the Python agent', () => {
   const result = signContext(
-    { userId: 'user-1', role: 'ADMIN', scopeLevel: 'SITE', organizationId: 'org-1', siteIds: ['site-1'] },
+    {
+      userId: 'user-1',
+      role: 'ADMIN',
+      scopeLevel: 'SITE',
+      organizationId: 'org-1',
+      siteId: 'site-1',
+      siteName: 'Sede Central',
+    },
     'corr-1',
     new Date(Date.now() + 10000).toISOString()
   );
@@ -23,4 +30,6 @@ test('signContext includes the jti claim required by the Python agent', () => {
   const claims = verifyContext(result.token, { publicKey, issuer: 'issuer', audience: 'audience' });
   assert.equal(claims.jti, result.jti);
   assert.equal(claims.correlation_id, 'corr-1');
+  assert.equal(claims.site_id, 'site-1');
+  assert.equal(claims.site_name, 'Sede Central');
 });

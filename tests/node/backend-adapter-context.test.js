@@ -23,7 +23,8 @@ test('resolves the actor context from CampusVote instead of JWT claims', async (
         role: 'ADMIN',
         scope_level: 'SITE',
         organization_id: 'org-1',
-        site_ids: ['site-1', 'site-2'],
+        site_id: 'site-1',
+        site_name: 'Sede Central',
       },
     });
   });
@@ -38,7 +39,8 @@ test('resolves the actor context from CampusVote instead of JWT claims', async (
     role: 'ADMIN',
     scopeLevel: 'SITE',
     organizationId: 'org-1',
-    siteIds: ['site-1', 'site-2'],
+    siteId: 'site-1',
+    siteName: 'Sede Central',
   });
 });
 

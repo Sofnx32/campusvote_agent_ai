@@ -12,7 +12,7 @@ const baseClaims = {
   role: 'ADMIN',
   scope_level: 'SITE',
   organization_id: 'org-1',
-  site_ids: ['site-1'],
+  site_id: 'site-1',
   jti: 'jti-1',
   correlation_id: 'corr-1',
   deadline_at: new Date(Date.now() + 10000).toISOString(),

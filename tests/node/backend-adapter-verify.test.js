@@ -19,7 +19,7 @@ test('sends site_id when verifying the active assignment', async () => {
   });
 
   await adapter.assertActiveAssignment(
-    { sub: 'user-1', organization_id: 'org-1', site_ids: ['site-1'] },
+    { sub: 'user-1', organization_id: 'org-1', site_id: 'site-1' },
     'site-1',
     'user-token',
     new AbortController().signal
@@ -39,7 +39,7 @@ test('rejects a revoked or expired site assignment', async () => {
 
   await assert.rejects(
     () => adapter.assertActiveAssignment(
-      { sub: 'user-1', organization_id: 'org-1', site_ids: ['site-1'] },
+      { sub: 'user-1', organization_id: 'org-1', site_id: 'site-1' },
       'site-1',
       'user-token',
       new AbortController().signal
@@ -56,7 +56,7 @@ test('rejects a site verifier response scoped to another organization', async ()
 
   await assert.rejects(
     () => adapter.assertActiveAssignment(
-      { sub: 'user-1', organization_id: 'org-1', site_ids: ['site-1'] },
+      { sub: 'user-1', organization_id: 'org-1', site_id: 'site-1' },
       'site-1',
       'user-token',
       new AbortController().signal
@@ -78,7 +78,7 @@ test('accepts fair scope when the backend exposes the site as site.id', async ()
   await adapter.assertFairAssignment(
     'fair-1',
     'site-1',
-    { sub: 'user-1', organization_id: 'org-1', site_ids: ['site-1'] },
+    { sub: 'user-1', organization_id: 'org-1', site_id: 'site-1' },
     'user-token',
     new AbortController().signal
   );

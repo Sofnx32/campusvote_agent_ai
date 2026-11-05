@@ -46,12 +46,13 @@ export class BackendAdapter {
       role: data.role,
       scopeLevel: data.scope_level ?? data.scopeLevel,
       organizationId: data.organization_id ?? data.organizationId,
-      siteIds: data.site_ids ?? data.siteIds,
+      siteId: data.site_id ?? data.siteId,
+      siteName: data.site_name ?? data.siteName,
     };
   }
 
   async assertActiveAssignment(context, siteId, userToken, signal) {
-    if (!context.site_ids.includes(siteId)) {
+    if (context.site_id !== siteId) {
       throw new AgentError('AI_SCOPE_FORBIDDEN', 'Site is not assigned to this administrator', 403);
     }
     if (!config.backendUrl || !config.verifySitePath) {
@@ -88,7 +89,7 @@ export class BackendAdapter {
     return {
       authorization: `Bearer ${userToken}`,
       'X-AI-Organization-Id': context.organization_id,
-      'X-AI-Site-Id': context.site_ids.join(','),
+      'X-AI-Site-Id': context.site_id,
     };
   }
 
@@ -195,7 +196,7 @@ export class BackendAdapter {
     if (
       fairOrganizationId !== context.organization_id ||
       fairSiteId !== siteId ||
-      !context.site_ids.includes(fairSiteId)
+      fairSiteId !== context.site_id
     ) {
       throw new AgentError('AI_SCOPE_FORBIDDEN', 'Fair is not assigned to this administrator', 403);
     }

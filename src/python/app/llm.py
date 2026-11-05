@@ -38,6 +38,19 @@ class LLMProvider:
         raise NotImplementedError
 
 
+def site_instructions(context: dict) -> str:
+    parts = [
+        "La sede activa ya fue resuelta y autorizada por CampusVote.",
+        "No solicites site_id, organization_id, UUIDs ni ning?n identificador interno.",
+        "No pidas al usuario que elija o confirme una sede por su ID.",
+        "Las herramientas operan siempre sobre la ?nica sede activa del contexto firmado.",
+    ]
+    site_name = context.get("site_name")
+    if isinstance(site_name, str) and site_name.strip():
+        parts.append(f"Sede activa: {site_name.strip()}.")
+    return " ".join(parts)
+
+
 class StaticProvider(LLMProvider):
     async def complete(self, message, context, tool_results, history=None, allow_writes=False) -> LLMResult:
         if tool_results:
@@ -58,7 +71,8 @@ class OpenAICompatibleProvider(LLMProvider):
                 "de sedes autorizadas. Nunca inventes datos, permisos ni resultados. Para crear una "
                 "rúbrica, recopila los datos, resume la propuesta y pide confirmación explícita. "
                 "Solo después de que el usuario diga que confirma puedes llamar herramientas de escritura. "
-                "Consultas y listados no requieren confirmación."
+                "Consultas y listados no requieren confirmación. "
+                f"{site_instructions(context)}"
             ),
         }]
         if history:
@@ -102,16 +116,14 @@ class OpenAICompatibleProvider(LLMProvider):
 def tool_schema(name: str) -> dict:
     if name == "createFairRubric":
         properties = {
-            "site_id": {"type": "string"},
             "fair_id": {"type": "string"},
             "name": {"type": "string"},
             "description": {"type": "string"},
         }
-        required = ["site_id", "fair_id", "name"]
+        required = ["fair_id", "name"]
         description = "Crea una rúbrica confirmada para una feria DRAFT."
     elif name == "addFairRubricCriterion":
         properties = {
-            "site_id": {"type": "string"},
             "fair_id": {"type": "string"},
             "name": {"type": "string"},
             "description": {"type": "string"},
@@ -119,67 +131,62 @@ def tool_schema(name: str) -> dict:
             "max_score": {"type": "number"},
             "position": {"type": "integer"},
         }
-        required = ["site_id", "fair_id", "name", "min_score", "max_score"]
+        required = ["fair_id", "name", "min_score", "max_score"]
         description = "Agrega un criterio confirmado a una rúbrica."
     elif name == "createFair":
         properties = {
-            "site_id": {"type": "string"},
             "name": {"type": "string"},
             "description": {"type": "string"},
             "starts_at": {"type": "string"},
             "ends_at": {"type": "string"},
         }
-        required = ["site_id", "name"]
+        required = ["name"]
         description = "Crea una feria en una sede autorizada, después de confirmación."
     elif name == "updateFair":
         properties = {
-            "site_id": {"type": "string"},
             "fair_id": {"type": "string"},
             "name": {"type": "string"},
             "description": {"type": "string"},
             "starts_at": {"type": "string"},
             "ends_at": {"type": "string"},
         }
-        required = ["site_id", "fair_id"]
+        required = ["fair_id"]
         description = "Actualiza una feria autorizada, después de confirmación."
     elif name == "changeFairStatus":
         properties = {
-            "site_id": {"type": "string"},
             "fair_id": {"type": "string"},
             "status": {"type": "string", "enum": ["DRAFT", "OPEN", "CLOSED"]},
         }
-        required = ["site_id", "fair_id", "status"]
+        required = ["fair_id", "status"]
         description = "Cambia el estado de una feria; requiere confirmación reforzada."
     elif name == "listFairStands":
-        properties = {"site_id": {"type": "string"}, "fair_id": {"type": "string"}}
-        required = ["site_id", "fair_id"]
+        properties = {"fair_id": {"type": "string"}}
+        required = ["fair_id"]
         description = "Lista los stands de una feria autorizada."
     elif name in {"createFairStand", "updateFairStand"}:
         properties = {
-            "site_id": {"type": "string"},
             "fair_id": {"type": "string"},
             "stand_id": {"type": "string"},
             "code": {"type": "string"},
             "description": {"type": "string"},
         }
         required = (
-            ["site_id", "fair_id", "code"]
+            ["fair_id", "code"]
             if name == "createFairStand"
-            else ["site_id", "fair_id", "stand_id"]
+            else ["fair_id", "stand_id"]
         )
         description = "Gestiona un stand de una feria; requiere confirmación."
     elif name == "deleteFairStand":
         properties = {
-            "site_id": {"type": "string"},
             "fair_id": {"type": "string"},
             "stand_id": {"type": "string"},
         }
-        required = ["site_id", "fair_id", "stand_id"]
+        required = ["fair_id", "stand_id"]
         description = "Elimina un stand; requiere confirmación reforzada."
     else:
-        properties = {"site_id": {"type": "string"}}
-        required = ["site_id"]
-        description = f"Consulta y lista datos agregados usando {name}."
+        properties = {}
+        required = []
+        description = f"Consulta y lista datos agregados de la sede activa usando {name}."
     return {
         "name": name,
         "description": description,

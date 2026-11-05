@@ -129,7 +129,7 @@ app.post('/internal/ai/v1/tools/:tool', async (req, res) => {
     if (context.correlation_id !== correlationId || req.body?.correlation_id !== correlationId) throw new AgentError('AI_INVALID_REQUEST', 'Correlation id mismatch', 400);
     if (typeof req.body?.tool_call_id !== 'string' || !req.body.tool_call_id) throw new AgentError('AI_INVALID_REQUEST', 'tool_call_id is required', 400);
     const siteId = req.body?.input?.site_id;
-    if (typeof siteId !== 'string' || !context.site_ids.includes(siteId)) throw new AgentError('AI_SCOPE_FORBIDDEN', 'Site is not authorized', 403);
+    if (typeof siteId !== 'string' || siteId !== context.site_id) throw new AgentError('AI_SCOPE_FORBIDDEN', 'Site is not authorized', 403);
     await replay.reserveTool(context.jti, req.body.tool_call_id, config.maxToolCalls);
     const userToken = userTokens.get(context.jti);
     if (!userToken) throw new AgentError('AI_CONTEXT_REPLAYED', 'Original authenticated request is no longer active', 409);
