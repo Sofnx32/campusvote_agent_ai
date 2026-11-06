@@ -9,6 +9,7 @@ import httpx
 from .config import settings
 from .errors import AgentError
 from .models import LLMResult
+from .observability import request_id_context
 
 TOOLS = [
     "getSiteOverview",
@@ -132,8 +133,8 @@ class OpenAICompatibleProvider(LLMProvider):
                     else:
                         code, public_status = "LLM_PROVIDER_UNAVAILABLE", 503
                     logger.warning(
-                        "LLM request failed provider=%s model=%s status=%s cause=http_status",
-                        settings.llm_provider, settings.llm_model, status,
+                        "LLM request failed requestId=%s provider=%s model=%s status=%s cause=http_status",
+                        request_id_context.get(), settings.llm_provider, settings.llm_model, status,
                     )
                     raise AgentError(code, "LLM provider request failed", public_status, status == 429 or status >= 500)
                 body = response.json()
@@ -141,20 +142,20 @@ class OpenAICompatibleProvider(LLMProvider):
                 if not isinstance(choice, dict):
                     raise ValueError("message must be an object")
         except httpx.TimeoutException as error:
-            logger.warning("LLM request failed provider=%s model=%s cause=timeout", settings.llm_provider, settings.llm_model)
+            logger.warning("LLM request failed requestId=%s provider=%s model=%s cause=timeout", request_id_context.get(), settings.llm_provider, settings.llm_model)
             raise AgentError("LLM_PROVIDER_TIMEOUT", "LLM provider timed out", 504, True) from error
         except AgentError:
             raise
         except httpx.RequestError as error:
             logger.warning(
-                "LLM request failed provider=%s model=%s cause=%s",
-                settings.llm_provider, settings.llm_model, type(error).__name__,
+                "LLM request failed requestId=%s provider=%s model=%s cause=%s",
+                request_id_context.get(), settings.llm_provider, settings.llm_model, type(error).__name__,
             )
             raise AgentError("LLM_PROVIDER_UNAVAILABLE", "LLM provider is unavailable", 503, True) from error
         except (KeyError, IndexError, TypeError, ValueError, json.JSONDecodeError) as error:
             logger.warning(
-                "LLM response invalid provider=%s model=%s cause=%s",
-                settings.llm_provider, settings.llm_model, type(error).__name__,
+                "LLM response invalid requestId=%s provider=%s model=%s cause=%s",
+                request_id_context.get(), settings.llm_provider, settings.llm_model, type(error).__name__,
             )
             raise AgentError("LLM_INVALID_RESPONSE", "LLM provider returned an invalid response", 502) from error
         tool_calls = choice.get("tool_calls") or []

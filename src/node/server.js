@@ -3,7 +3,9 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import { Agent as UndiciAgent } from 'undici';
 import { config, assertProductionConfiguration } from './config.js';
-import { AgentError, errorResponse } from './errors.js';
+import { AgentError, errorResponse, publicError } from './errors.js';
+import { readJsonResponse } from './http-response.js';
+import { jsonParserErrorHandler } from './http-middleware.js';
 import { extractBearer, verifyUser, validateActor, signContext, verifyContext } from './context.js';
 import { ReplayStore } from './replay-store.js';
 import { BackendAdapter } from './backend-adapter.js';
@@ -16,13 +18,12 @@ app.use((req, res, next) => {
   if (origin && config.allowedOrigins.includes(origin)) {
     res.setHeader('Access-Control-Allow-Origin', origin);
     res.setHeader('Vary', 'Origin');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Correlation-Id');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Correlation-Id, X-Request-Id');
     res.setHeader('Access-Control-Allow-Methods', 'POST, GET, OPTIONS');
   }
   if (req.method === 'OPTIONS') return res.sendStatus(origin && config.allowedOrigins.includes(origin) ? 204 : 403);
   return next();
 });
-app.use(express.json({ limit: '64kb' }));
 const replay = await ReplayStore.create();
 const backend = new BackendAdapter();
 const activeRequests = new Set();
@@ -134,15 +135,39 @@ const requireServiceToken = (req) => {
   if (req.get('authorization') !== `Bearer ${config.serviceToken}`) throw new AgentError('AI_SERVICE_UNAUTHORIZED', 'Invalid service token', 401);
 };
 
-const handleError = (error, correlationId, res) => {
-  const normalized = error.name === 'AbortError' ? new AgentError('AI_TOOL_TIMEOUT', 'Operation timed out', 504, true) : error;
-  res.status(normalized.status || 500).json(errorResponse(normalized, correlationId));
+const handleError = (error, correlationId, res, req, startedAt) => {
+  const normalized = publicError(error);
+  console.error(JSON.stringify({
+    event: 'request_failed', service: 'agent-node', requestId: correlationId,
+    method: req?.method, route: req?.route?.path || req?.path,
+    status: normalized.status, code: normalized.code,
+    cause: error?.name || 'Error', durationMs: startedAt ? Date.now() - startedAt : undefined,
+  }));
+  if (!res.headersSent) res.status(normalized.status).json(errorResponse(normalized, correlationId));
 };
+
+app.use((req, res, next) => {
+  const incoming = req.get('X-Correlation-Id') || req.get('X-Request-Id');
+  const requestId = typeof incoming === 'string' && /^[a-zA-Z0-9._:-]{1,128}$/.test(incoming)
+    ? incoming : crypto.randomUUID();
+  req.requestId = requestId;
+  req.startedAt = Date.now();
+  res.setHeader('X-Request-Id', requestId);
+  res.setHeader('X-Correlation-Id', requestId);
+  res.on('finish', () => console.info(JSON.stringify({
+    event: 'request_complete', service: 'agent-node', requestId,
+    method: req.method, route: req.route?.path || req.path,
+    status: res.statusCode, durationMs: Date.now() - req.startedAt,
+  })));
+  next();
+});
+app.use(express.json({ limit: '64kb' }));
+app.use(jsonParserErrorHandler);
 
 app.get('/health', (_req, res) => res.json({ success: true, service: 'campusvote-agent-node' }));
 
 app.post('/v1/chat', async (req, res) => {
-  const correlationId = req.get('X-Correlation-Id') || req.body?.correlation_id || crypto.randomUUID();
+  const correlationId = req.requestId;
   const conversationId = req.body?.conversation_id || crypto.randomUUID();
   try {
     const userToken = extractBearer(req.get('authorization'));
@@ -152,7 +177,7 @@ app.post('/v1/chat', async (req, res) => {
     if (typeof req.body?.message !== 'string' || req.body.message.length < 1 || req.body.message.length > 4000) throw new AgentError('AI_INVALID_REQUEST', 'Message must contain 1-4000 characters', 400);
     const resolvedActor = await withTimeout(
       config.toolTimeoutMs,
-      async (signal) => backend.resolveActorContext(userToken, signal)
+      async (signal) => backend.resolveActorContext(userToken, signal, correlationId)
     );
     const actor = validateActor(resolvedActor);
     const tokenUserId = userClaims.userId ?? userClaims.sub;
@@ -256,7 +281,7 @@ app.post('/v1/chat', async (req, res) => {
         throw new AgentError('AI_CONFIRMATION_REQUIRED', 'La confirmación ya se usó o venció', 409);
       }
       await withTimeout(config.toolTimeoutMs, async (signal) => backend.assertActiveAssignment(
-        { sub: actor.userId, organization_id: actor.organizationId, site_id: actor.siteId },
+        { sub: actor.userId, organization_id: actor.organizationId, site_id: actor.siteId, correlation_id: correlationId },
         actor.siteId,
         userToken,
         signal
@@ -296,7 +321,7 @@ app.post('/v1/chat', async (req, res) => {
           dispatcher: httpsDispatcher,
           signal,
         });
-        const payload = await upstream.json();
+        const payload = await readJsonResponse(upstream, 'python');
         if (!upstream.ok) throw new AgentError(payload.error?.code || 'AI_INTERNAL_ERROR', payload.error?.message || 'AI service failed', upstream.status, payload.error?.retryable);
         return payload;
       });
@@ -307,7 +332,7 @@ app.post('/v1/chat', async (req, res) => {
       activeRequests.delete(context.jti);
     }
   } catch (error) {
-    return handleError(error, correlationId, res);
+    return handleError(error, correlationId, res, req, req.startedAt);
   }
 });
 
@@ -354,8 +379,22 @@ app.post('/internal/ai/v1/tools/:tool', async (req, res) => {
     const data = await withTimeout(config.toolTimeoutMs, async (signal) => backend.callTool(req.params.tool, input, context, userToken, signal));
     res.json({ success: true, data, meta: { tool: req.params.tool, correlation_id: correlationId, truncated: false, resource_refs: [] } });
   } catch (error) {
-    handleError(error, correlationId, res);
+    handleError(error, correlationId, res, req, req.startedAt);
   }
+});
+
+app.use((req, res) => {
+  const correlationId = req.requestId || crypto.randomUUID();
+  const error = new AgentError('AI_RESOURCE_NOT_FOUND', 'No se encontró el recurso solicitado.', 404);
+  res.status(404).json(errorResponse(error, correlationId));
+});
+
+app.use((error, req, res, _next) => {
+  const correlationId = req.requestId || crypto.randomUUID();
+  const badJson = error instanceof SyntaxError && Object.hasOwn(error, 'body');
+  handleError(badJson
+    ? new AgentError('VALIDATION_INVALID_JSON', 'Revisa la información ingresada.', 400)
+    : error, correlationId, res, req, req.startedAt);
 });
 
 app.listen(config.port, () => console.log(JSON.stringify({ event: 'agent_node_started', port: config.port })));

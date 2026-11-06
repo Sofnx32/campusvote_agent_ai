@@ -46,3 +46,9 @@ test('pending action expires after its confirmation window', async () => {
   assert.equal(await store.getPendingAction('scope-expiring'), null);
   assert.equal(await store.consumePendingAction('scope-expiring', 'digest'), false);
 });
+
+test('maps Redis outages to a stable retryable REDIS_UNAVAILABLE error', async () => {
+  const store = new ReplayStore({ set: async () => { throw Object.assign(new Error('redis password=hidden'), { code: 'ECONNREFUSED' }); } });
+  await assert.rejects(() => store.setIssued('jti-redis', { correlationId: 'corr-redis', deadlineAt: new Date(Date.now() + 10000).toISOString() }),
+    (error) => error.code === 'REDIS_UNAVAILABLE' && error.status === 503 && error.retryable === true && !error.message.includes('password'));
+});

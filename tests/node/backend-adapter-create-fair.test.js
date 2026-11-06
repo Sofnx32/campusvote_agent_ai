@@ -55,7 +55,7 @@ test('creates a SITE teaching criterion using only the signed site context', asy
   let request;
   const adapter = new BackendAdapter(async (url, options) => {
     request = { url: new URL(url), options };
-    return new Response(JSON.stringify({ success: true, data: { id: 'criterion-a' } }), { status: 201 });
+    return new Response(JSON.stringify({ success: true, data: { id: 'criterion-a' } }), { status: 201, headers: { 'content-type': 'application/json' } });
   });
   await adapter.callTool('createTeachingCriterion', {
     name: 'Claridad docente', site_id: 'site-authorized',

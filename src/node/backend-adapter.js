@@ -1,5 +1,6 @@
 import { config } from './config.js';
 import { AgentError } from './errors.js';
+import { readJsonResponse } from './http-response.js';
 
 const pathFor = (tool) => config.toolPaths[tool];
 
@@ -8,7 +9,7 @@ export class BackendAdapter {
     this.fetch = fetchImpl;
   }
 
-  async resolveActorContext(userToken, signal) {
+  async resolveActorContext(userToken, signal, correlationId) {
     if (!config.backendUrl || !config.resolveContextPath) {
       throw new AgentError('AI_TOOL_UNAVAILABLE', 'Site context resolver is not configured', 503, true);
     }
@@ -16,7 +17,7 @@ export class BackendAdapter {
       throw new AgentError('AI_TOOL_UNAVAILABLE', 'CampusVote authentication mode is not configured', 503, true);
     }
     const response = await this.fetch(new URL(config.resolveContextPath, config.backendUrl), {
-      headers: { authorization: `Bearer ${userToken}` },
+      headers: { authorization: `Bearer ${userToken}`, ...(correlationId ? { 'X-Correlation-Id': correlationId } : {}) },
       signal,
     });
     if (!response.ok) {
@@ -39,7 +40,7 @@ export class BackendAdapter {
         response.status >= 500
       );
     }
-    const payload = await response.json();
+    const payload = await readJsonResponse(response, 'campusvote');
     const data = payload.data ?? payload;
     return {
       userId: data.user_id ?? data.userId ?? data.id,
@@ -75,7 +76,7 @@ export class BackendAdapter {
         response.status >= 500
       );
     }
-    const result = await response.json();
+    const result = await readJsonResponse(response, 'campusvote');
     const envelope = result.data ?? result;
     const data = envelope.data ?? envelope;
     if (data.active !== true || data.organization_id !== context.organization_id || data.site_id !== siteId) {
@@ -97,6 +98,7 @@ export class BackendAdapter {
       authorization: `Bearer ${userToken}`,
       'X-AI-Organization-Id': context.organization_id,
       'X-AI-Site-Id': context.site_id,
+      ...(context.correlation_id ? { 'X-Correlation-Id': context.correlation_id } : {}),
     };
   }
 
@@ -200,7 +202,7 @@ export class BackendAdapter {
               : 'AI_BACKEND_REJECTED';
       throw new AgentError(code, backendError.message || `${tool} was rejected by CampusVote`, response.status);
     }
-    const result = await response.json();
+    const result = await readJsonResponse(response, 'campusvote');
     const data = result.data ?? result;
     if (config.requireScopedToolEnvelope && !isWriteTool && !directFairTool && !directAcademicTool) {
       if (data.organization_id !== context.organization_id || data.site_id !== input.site_id) {
@@ -237,7 +239,7 @@ export class BackendAdapter {
         response.status >= 500
       );
     }
-    const result = await response.json();
+    const result = await readJsonResponse(response, 'campusvote');
     const fair = result.data ?? result;
     const fairOrganizationId = fair.organization_id ?? fair.organizationId;
     const fairSiteId = fair.site_id ?? fair.siteId ?? fair.site?.id;

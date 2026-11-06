@@ -18,6 +18,14 @@ export class ReplayStore {
     this.clock = clock;
   }
 
+  async redisCall(operation) {
+    try {
+      return await operation();
+    } catch (error) {
+      throw new AgentError('REDIS_UNAVAILABLE', 'Replay state store is unavailable', 503, true, { cause: error });
+    }
+  }
+
   static async create() {
     if (config.redisUrl) return new ReplayStore(new Redis(config.redisUrl, { lazyConnect: false }));
     if (config.nodeEnv === 'production' || !config.allowInMemoryReplay) {
@@ -28,7 +36,7 @@ export class ReplayStore {
 
   async setIssued(jti, value) {
     if (this.redis) {
-      const result = await this.redis.set(`ai:context-jti:${jti}`, JSON.stringify({ status: 'issued', request_open: true, correlation_id: value.correlationId, deadline_at: value.deadlineAt, user_id: value.userId }), 'NX', 'EX', config.jtiTtlSeconds);
+      const result = await this.redisCall(() => this.redis.set(`ai:context-jti:${jti}`, JSON.stringify({ status: 'issued', request_open: true, correlation_id: value.correlationId, deadline_at: value.deadlineAt, user_id: value.userId }), 'NX', 'EX', config.jtiTtlSeconds));
       if (result !== 'OK') throw new AgentError('AI_CONTEXT_REPLAYED', 'Context jti already exists', 409);
       return;
     }
@@ -49,7 +57,7 @@ export class ReplayStore {
         redis.call('SET', KEYS[1], cjson.encode(decoded), 'KEEPTTL')
         return 'ok'
       `;
-      const result = await this.redis.eval(script, 1, `ai:context-jti:${jti}`, expected.correlationId);
+      const result = await this.redisCall(() => this.redis.eval(script, 1, `ai:context-jti:${jti}`, expected.correlationId));
       if (result !== 'ok') throw new AgentError(result === 'mismatch' ? 'AI_CONTEXT_INVALID' : 'AI_CONTEXT_REPLAYED', 'Context cannot be consumed', result === 'mismatch' ? 401 : 409);
       return;
     }
@@ -63,12 +71,12 @@ export class ReplayStore {
   async reserveTool(jti, toolCallId, maxCalls) {
     const key = `ai:tool-call:${jti}:${toolCallId}`;
     if (this.redis) {
-      const state = await this.redis.get(`ai:context-jti:${jti}`);
+      const state = await this.redisCall(() => this.redis.get(`ai:context-jti:${jti}`));
       if (!state || JSON.parse(state).status !== 'consumed' || JSON.parse(state).request_open !== true) throw new AgentError('AI_CONTEXT_REPLAYED', 'Context is not active', 409);
-      const count = await this.redis.incr(`ai:tool-count:${jti}`);
-      if (count === 1) await this.redis.expire(`ai:tool-count:${jti}`, config.jtiTtlSeconds);
+      const count = await this.redisCall(() => this.redis.incr(`ai:tool-count:${jti}`));
+      if (count === 1) await this.redisCall(() => this.redis.expire(`ai:tool-count:${jti}`, config.jtiTtlSeconds));
       if (count > maxCalls) throw new AgentError('AI_RATE_LIMITED', 'Tool call budget exceeded', 429, true);
-      const result = await this.redis.set(key, '1', 'NX', 'EX', config.jtiTtlSeconds);
+      const result = await this.redisCall(() => this.redis.set(key, '1', 'NX', 'EX', config.jtiTtlSeconds));
       if (result !== 'OK') throw new AgentError('AI_CONTEXT_REPLAYED', 'Tool call already used', 409);
       return;
     }
@@ -91,7 +99,7 @@ export class ReplayStore {
         redis.call('SET', KEYS[1], cjson.encode(decoded), 'KEEPTTL')
         return 1
       `;
-      await this.redis.eval(script, 1, `ai:context-jti:${jti}`);
+      await this.redisCall(() => this.redis.eval(script, 1, `ai:context-jti:${jti}`));
       return;
     }
     const entry = memory.get(jti);
@@ -101,7 +109,7 @@ export class ReplayStore {
   async setPendingAction(key, value) {
     const storageKey = `ai:pending-action:${key}`;
     if (this.redis) {
-      await this.redis.set(storageKey, JSON.stringify(value), 'EX', ACTION_TTL_SECONDS);
+      await this.redisCall(() => this.redis.set(storageKey, JSON.stringify(value), 'EX', ACTION_TTL_SECONDS));
       return;
     }
     pendingActions.set(key, { value, expiresAt: this.clock() + ACTION_TTL_SECONDS * 1000 });
@@ -109,7 +117,7 @@ export class ReplayStore {
 
   async getPendingAction(key) {
     if (this.redis) {
-      const value = await this.redis.get(`ai:pending-action:${key}`);
+      const value = await this.redisCall(() => this.redis.get(`ai:pending-action:${key}`));
       return value ? JSON.parse(value) : null;
     }
     const entry = pendingActions.get(key);
@@ -130,7 +138,7 @@ export class ReplayStore {
         redis.call('DEL', KEYS[1])
         return 'ok'
       `;
-      return await this.redis.eval(script, 1, `ai:pending-action:${key}`, expectedDigest) === 'ok';
+      return await this.redisCall(() => this.redis.eval(script, 1, `ai:pending-action:${key}`, expectedDigest)) === 'ok';
     }
     const entry = await this.getPendingAction(key);
     if (!entry || entry.digest !== expectedDigest) return false;
@@ -140,7 +148,7 @@ export class ReplayStore {
 
   async clearPendingAction(key) {
     if (this.redis) {
-      await this.redis.del(`ai:pending-action:${key}`);
+      await this.redisCall(() => this.redis.del(`ai:pending-action:${key}`));
       return;
     }
     pendingActions.delete(key);

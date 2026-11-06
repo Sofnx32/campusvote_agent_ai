@@ -7,7 +7,8 @@ from datetime import datetime, timezone
 import logging
 import time
 
-from fastapi import FastAPI, Header, Request
+from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from .config import settings
@@ -16,6 +17,7 @@ from .errors import AgentError, error_payload
 from .llm import get_provider
 from .llm import CONFIRMATION
 from .models import ChatRequest
+from .observability import request_id_context
 from .tools import execute_tool
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
@@ -73,8 +75,58 @@ app = FastAPI(title="CampusVote Agent AI", version="0.1.0", lifespan=lifespan)
 
 @app.exception_handler(AgentError)
 async def agent_error_handler(request: Request, error: AgentError):
-    correlation = request.headers.get("X-Correlation-Id")
+    correlation = getattr(request.state, "request_id", None)
+    logger.warning("request_failed service=agent-python requestId=%s status=%s code=%s cause=%s",
+                   correlation, error.status, error.code, type(error).__name__)
     return JSONResponse(status_code=error.status, content=error_payload(error, correlation))
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_error_handler(request: Request, _error: RequestValidationError):
+    correlation = getattr(request.state, "request_id", None)
+    error = AgentError("VALIDATION_INVALID_REQUEST", "Revisa la información ingresada.", 422)
+    return JSONResponse(status_code=422, content=error_payload(error, correlation))
+
+
+@app.exception_handler(HTTPException)
+async def http_error_handler(request: Request, error: HTTPException):
+    correlation = getattr(request.state, "request_id", None)
+    code, message = {
+        401: ("AI_SERVICE_UNAUTHORIZED", "No fue posible validar la solicitud del asistente."),
+        403: ("AI_SCOPE_FORBIDDEN", "No tienes permisos para realizar esta operación."),
+        404: ("AI_RESOURCE_NOT_FOUND", "No se encontró el recurso solicitado."),
+        429: ("AI_RATE_LIMITED", "Demasiadas solicitudes. Inténtalo más tarde."),
+    }.get(error.status_code, ("AI_INTERNAL_ERROR", "Ocurrió un problema inesperado."))
+    safe = AgentError(code, message, error.status_code)
+    return JSONResponse(status_code=error.status_code, content=error_payload(safe, correlation))
+
+
+@app.exception_handler(Exception)
+async def unexpected_error_handler(request: Request, error: Exception):
+    correlation = getattr(request.state, "request_id", None)
+    logger.error("request_failed service=agent-python requestId=%s status=500 code=AI_INTERNAL_ERROR cause=%s",
+                 correlation, type(error).__name__)
+    safe = AgentError("AI_INTERNAL_ERROR", "Ocurrió un problema inesperado.", 500)
+    return JSONResponse(status_code=500, content=error_payload(safe, correlation))
+
+
+@app.middleware("http")
+async def request_context(request: Request, call_next):
+    supplied = request.headers.get("X-Correlation-Id", "")
+    request_id = supplied if supplied and len(supplied) <= 128 and all(c.isalnum() or c in "._:-" for c in supplied) else __import__("uuid").uuid4().hex
+    request.state.request_id = request_id
+    context_token = request_id_context.set(request_id)
+    started = time.monotonic()
+    try:
+        response = await call_next(request)
+        response.headers["X-Request-Id"] = request_id
+        response.headers["X-Correlation-Id"] = request_id
+        logger.info("request_complete service=agent-python requestId=%s method=%s route=%s status=%s durationMs=%s",
+                    request_id, request.method, request.url.path, response.status_code,
+                    round((time.monotonic() - started) * 1000))
+        return response
+    finally:
+        request_id_context.reset(context_token)
 
 
 @app.get("/health")
