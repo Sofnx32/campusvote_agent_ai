@@ -100,6 +100,8 @@ def test_provider_http_errors_are_classified(monkeypatch, status, code):
         run(llm.OpenAICompatibleProvider().complete("ferias", {}, []))
 
     assert error.value.code == code
+    if status == 429:
+        assert error.value.status == 429
 
 
 def test_provider_timeout_is_classified(monkeypatch):

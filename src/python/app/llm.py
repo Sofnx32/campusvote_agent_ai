@@ -129,7 +129,7 @@ class OpenAICompatibleProvider(LLMProvider):
                     elif status == 404:
                         code, public_status = "LLM_MODEL_NOT_FOUND", 502
                     elif status == 429:
-                        code, public_status = "LLM_RATE_LIMITED", 503
+                        code, public_status = "LLM_RATE_LIMITED", 429
                     else:
                         code, public_status = "LLM_PROVIDER_UNAVAILABLE", 503
                     logger.warning(
