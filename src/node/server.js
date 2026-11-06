@@ -166,6 +166,37 @@ app.use(jsonParserErrorHandler);
 
 app.get('/health', (_req, res) => res.json({ success: true, service: 'campusvote-agent-node' }));
 
+// Readiness probe used by the authenticated frontend session. Calling this
+// endpoint also sends inbound traffic to Python so a free Render instance can
+// wake before the user submits a chat message.
+app.get('/health/agent', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  try {
+    const upstream = await withTimeout(5000, (signal) => fetch(new URL('/health', config.pythonUrl), {
+      signal,
+      dispatcher: httpsDispatcher,
+      headers: { 'X-Correlation-Id': req.requestId },
+    }));
+    if (!upstream.ok) throw new AgentError('AI_SERVICE_UNAVAILABLE', 'Python readiness check failed', 503, true);
+    const payload = await readJsonResponse(upstream, 'python');
+    if (payload?.success !== true || payload?.service !== 'campusvote-agent-python') {
+      throw new AgentError('AI_SERVICE_UNAVAILABLE', 'Python readiness response is invalid', 503, true);
+    }
+    return res.json({ success: true, ready: true, service: 'campusvote-agent-node' });
+  } catch (error) {
+    console.warn(JSON.stringify({
+      event: 'dependency_not_ready', service: 'agent-node', dependency: 'agent-python',
+      requestId: req.requestId, cause: error?.name || 'Error',
+      status: error?.status || undefined,
+    }));
+    return res.status(503).json({
+      success: false, ready: false,
+      error: { code: 'AI_SERVICE_UNAVAILABLE', message: 'El asistente se está iniciando.', requestId: req.requestId },
+      requestId: req.requestId,
+    });
+  }
+});
+
 app.post('/v1/chat', async (req, res) => {
   const correlationId = req.requestId;
   const conversationId = req.body?.conversation_id || crypto.randomUUID();
