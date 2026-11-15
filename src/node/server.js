@@ -172,7 +172,7 @@ app.get('/health', (_req, res) => res.json({ success: true, service: 'campusvote
 app.get('/health/agent', async (req, res) => {
   res.setHeader('Cache-Control', 'no-store');
   try {
-    const upstream = await withTimeout(5000, (signal) => fetch(new URL('/health', config.pythonUrl), {
+    const upstream = await withTimeout(20000, (signal) => fetch(new URL('/health', config.pythonUrl), {
       signal,
       dispatcher: httpsDispatcher,
       headers: { 'X-Correlation-Id': req.requestId },
