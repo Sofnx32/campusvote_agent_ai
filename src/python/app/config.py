@@ -5,13 +5,19 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 # El servicio Python se arranca con uvicorn directamente, así que no hereda el
-# `--env-file` de Node. Cargamos el .env de la raíz del repositorio una sola vez
-# antes de construir Settings. Las variables ya exportadas por el sistema tienen
-# prioridad (override=False), como en producción.
-_parents = Path(__file__).resolve().parents
-_ENV_FILE = (_parents[3] if len(_parents) > 3 else _parents[-1]) / ".env"
-if _ENV_FILE.exists():
-    load_dotenv(_ENV_FILE, override=False)
+# `--env-file` de Node. Buscamos el .env de la raíz del repositorio subiendo por
+# los ancestros del módulo (en desarrollo está en la raíz; en el contenedor de
+# Render no existe y las variables llegan por el entorno). Las variables ya
+# exportadas por el sistema tienen prioridad (override=False), como en producción.
+def _load_repository_env() -> None:
+    for parent in Path(__file__).resolve().parents:
+        candidate = parent / ".env"
+        if candidate.is_file():
+            load_dotenv(candidate, override=False)
+            return
+
+
+_load_repository_env()
 
 
 @dataclass(frozen=True)
