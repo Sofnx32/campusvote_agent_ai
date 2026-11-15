@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 
 from pydantic import BaseModel, Field
 
@@ -11,10 +12,28 @@ class ChatRequest(BaseModel):
 
 
 class ToolCall(BaseModel):
+    id: str = ""
     name: str
     arguments: dict
 
 
 class LLMResult(BaseModel):
     content: str | None = None
-    tool_call: ToolCall | None = None
+    tool_calls: list[ToolCall] = Field(default_factory=list)
+
+    def assistant_message(self) -> dict:
+        """Build the assistant message that must precede tool results."""
+        message: dict = {"role": "assistant", "content": self.content or ""}
+        if self.tool_calls:
+            message["tool_calls"] = [
+                {
+                    "id": call.id,
+                    "type": "function",
+                    "function": {
+                        "name": call.name,
+                        "arguments": json.dumps(call.arguments, ensure_ascii=False),
+                    },
+                }
+                for call in self.tool_calls
+            ]
+        return message

@@ -14,8 +14,8 @@ from fastapi.responses import JSONResponse
 from .config import settings
 from .context import verify_context, verify_service_token
 from .errors import AgentError, error_payload
+from .agent import run_agent_turn
 from .llm import get_provider
-from .llm import CONFIRMATION
 from .models import ChatRequest
 from .observability import request_id_context
 from .tools import execute_tool
@@ -82,10 +82,16 @@ async def agent_error_handler(request: Request, error: AgentError):
 
 
 @app.exception_handler(RequestValidationError)
-async def validation_error_handler(request: Request, _error: RequestValidationError):
+async def validation_error_handler(request: Request, error: RequestValidationError):
     correlation = getattr(request.state, "request_id", None)
-    error = AgentError("VALIDATION_INVALID_REQUEST", "Revisa la información ingresada.", 422)
-    return JSONResponse(status_code=422, content=error_payload(error, correlation))
+    # Log solo ubicación y tipo: nunca el valor recibido.
+    logger.warning(
+        "request_validation_failed service=agent-python requestId=%s errors=%s",
+        correlation,
+        [{"loc": list(item.get("loc", ())), "type": item.get("type")} for item in error.errors()],
+    )
+    safe = AgentError("VALIDATION_INVALID_REQUEST", "Revisa la información ingresada.", 422)
+    return JSONResponse(status_code=422, content=error_payload(safe, correlation))
 
 
 @app.exception_handler(HTTPException)
@@ -148,22 +154,29 @@ async def chat(
         raise AgentError("AI_INVALID_REQUEST", "Correlation id mismatch", 400)
     context["_raw_token"] = x_ai_context
     context["conversation_id"] = payload.conversation_id
-    started = time.monotonic()
-    results = []
     history = get_history(payload.conversation_id, context)
-    allow_writes = bool(CONFIRMATION.search(payload.message))
-    current = await provider.complete(payload.message, context, results, history, allow_writes)
-    for _ in range(settings.max_tool_calls):
-        if not current.tool_call:
-            break
-        results.append(await execute_tool(current.tool_call, context, payload.message))
-        current = await provider.complete(payload.message, context, results, history, allow_writes)
-        if time.monotonic() - started > 25:
-            raise AgentError("AI_DEADLINE_EXCEEDED", "Global deadline exceeded", 504, True)
-    if not current.content:
-        raise AgentError("AI_RESPONSE_INVALID", "LLM returned no content", 502)
-    save_turn(payload.conversation_id, context, payload.message, current.content)
+    current, results = await run_agent_turn(
+        provider,
+        context,
+        payload.message,
+        history,
+        execute_tool,
+        max_tool_calls=settings.max_tool_calls,
+    )
     last_action = results[-1].get("data") if results and isinstance(results[-1], dict) else None
+    reply_content = (current.content or "").strip()
+    if not reply_content:
+        if isinstance(last_action, dict) and last_action.get("status") == "confirmation_required":
+            reply_content = "Preparé la propuesta con los datos indicados. Revísala y confirma para aplicarla."
+        else:
+            raise AgentError("AI_RESPONSE_INVALID", "LLM returned no content", 502)
+    if isinstance(last_action, dict) and last_action.get("status") == "confirmation_required" and last_action.get("tool") == "createFair":
+        reply_content = (
+            "Revisa los datos de la feria en la tarjeta. Sube la portada desde aquí; "
+            "podrás confirmar cuando esté lista."
+        )
+    reply_content = reply_content[:4000]
+    save_turn(payload.conversation_id, context, payload.message, reply_content)
     ui = {"type": "message", "schema": None, "data": None, "actions": []}
     operation = None
     if isinstance(last_action, dict) and last_action.get("status") == "confirmation_required":
@@ -234,11 +247,7 @@ async def chat(
     return {
         "success": True,
         "conversation_id": payload.conversation_id,
-        "message": {"role": "assistant", "content": (
-            "Revisa los datos de la feria en la tarjeta. Sube la portada desde aquí; podrás confirmar cuando esté lista."
-            if isinstance(last_action, dict) and last_action.get("status") == "confirmation_required" and last_action.get("tool") == "createFair"
-            else current.content[:4000]
-        )},
+        "message": {"role": "assistant", "content": reply_content},
         "ui": ui,
         "operation": operation,
         "citations": [],

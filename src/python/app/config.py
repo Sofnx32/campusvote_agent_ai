@@ -1,5 +1,16 @@
 import os
 from dataclasses import dataclass
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+# El servicio Python se arranca con uvicorn directamente, así que no hereda el
+# `--env-file` de Node. Cargamos el .env de la raíz del repositorio una sola vez
+# antes de construir Settings. Las variables ya exportadas por el sistema tienen
+# prioridad (override=False), como en producción.
+_ENV_FILE = Path(__file__).resolve().parents[3] / ".env"
+if _ENV_FILE.exists():
+    load_dotenv(_ENV_FILE, override=False)
 
 
 @dataclass(frozen=True)
@@ -19,6 +30,9 @@ class Settings:
     llm_url: str = os.getenv("LLM_URL", os.getenv("LLM_BASE_URL", ""))
     llm_model: str = os.getenv("LLM_MODEL", "")
     llm_api_key: str = os.getenv("LLM_API_KEY", "")
+    llm_fallback_url: str = os.getenv("LLM_FALLBACK_URL", "")
+    llm_fallback_model: str = os.getenv("LLM_FALLBACK_MODEL", "")
+    llm_fallback_api_key: str = os.getenv("LLM_FALLBACK_API_KEY", "")
     llm_timeout_seconds: float = float(os.getenv("LLM_TIMEOUT_SECONDS", "7"))
     max_tool_calls: int = int(os.getenv("AI_MAX_TOOL_CALLS", "5"))
     tool_timeout_seconds: float = float(os.getenv("AI_TOOL_TIMEOUT_SECONDS", "5"))

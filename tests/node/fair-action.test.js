@@ -4,6 +4,7 @@ import { AgentError } from '../../src/node/errors.js';
 import {
   fairActionScopeKey,
   fairPayloadDigest,
+  isExplicitAffirmation,
   isFairCancellation,
   isFairConfirmation,
   validateWriteProposal,
@@ -62,6 +63,15 @@ test('recognizes explicit confirmation and cancellation language', () => {
   assert.equal(isFairCancellation('Cancela la feria'), true);
 });
 
+test('recognizes short affirmations only when they clearly confirm', () => {
+  for (const message of ['sí', 'Si', 'sí, por favor', 'ok', 'dale', 'de acuerdo', 'adelante!', 'correcto']) {
+    assert.equal(isExplicitAffirmation(message), true, message);
+  }
+  for (const message of ['no', 'si la feria es mañana', 'sí, pero cambia el nombre', '¿confirmas?', '']) {
+    assert.equal(isExplicitAffirmation(message), false, message);
+  }
+});
+
 test('validates rubric actions without accepting browser or model scope overrides', () => {
   assert.deepEqual(validateWriteProposal('createFairRubric', {
     fair_id: 'fair-a', name: 'Rúbrica base', site_id: 'site-a',
@@ -77,7 +87,7 @@ test('validates rubric actions without accepting browser or model scope override
 
 test('does not trust model-supplied fair image URLs and allows a proposal to wait for upload', () => {
   const proposal = validateWriteProposal('createFair', preserveUploadedFairImage({
-    name: 'Feria tecnol�gica', image_url: 'https://attacker.example/fake.jpg', site_id: 'site-a',
+    name: 'Feria tecnol�gica', image_url: 'https://attacker.example/fake.jpg', site_id: 'site-a',
   }, null), context);
   assert.equal(proposal.image_url, undefined);
   assert.deepEqual(preserveUploadedFairImage({

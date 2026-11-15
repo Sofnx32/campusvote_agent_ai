@@ -9,7 +9,7 @@ import { jsonParserErrorHandler } from './http-middleware.js';
 import { extractBearer, verifyUser, validateActor, signContext, verifyContext } from './context.js';
 import { ReplayStore } from './replay-store.js';
 import { BackendAdapter } from './backend-adapter.js';
-import { fairActionScopeKey, operationDigest, isFairCancellation, isFairConfirmation, isFairResume, preserveUploadedFairImage, validateWriteProposal } from './fair-action.js';
+import { fairActionScopeKey, operationDigest, isExplicitAffirmation, isFairCancellation, isFairConfirmation, isFairResume, preserveUploadedFairImage, validateWriteProposal } from './fair-action.js';
 
 assertProductionConfiguration();
 const app = express();
@@ -299,7 +299,7 @@ app.post('/v1/chat', async (req, res) => {
         citations: [], suggested_actions: [], meta: { correlation_id: correlationId, tool_calls: 0, truncated: false },
       });
     }
-    if (isFairConfirmation(req.body.message) && pendingAction &&
+    if ((isFairConfirmation(req.body.message) || (pendingAction && isExplicitAffirmation(req.body.message))) && pendingAction &&
         pendingAction.userId === actor.userId && pendingAction.organizationId === actor.organizationId &&
         pendingAction.siteId === actor.siteId && pendingAction.digest === operationDigest(pendingAction.tool, pendingAction.proposal)) {
       if (pendingAction.tool === 'createFair' && !pendingAction.proposal.image_url) {

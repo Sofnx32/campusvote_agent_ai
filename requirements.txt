@@ -1,5 +1,6 @@
 fastapi==0.121.0
 httpx==0.28.1
 PyJWT[crypto]==2.10.1
+python-dotenv==1.2.4
 uvicorn[standard]==0.38.0
 pytest==8.4.2

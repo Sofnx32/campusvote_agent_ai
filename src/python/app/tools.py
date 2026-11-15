@@ -1,5 +1,5 @@
 import uuid
-import re
+
 import httpx
 
 from .config import settings
@@ -22,11 +22,6 @@ WRITE_TOOLS = {
     "toggleTeachingCriterion",
     "deleteTeachingCriterion",
 }
-CONFIRMATION = re.compile(
-    r"\b(confirmo|confirmar|confirma|sí,\s*crear|si,\s*crear|adelante)\b",
-    re.IGNORECASE,
-)
-
 async def execute_tool(tool_call: ToolCall, context: dict, user_message: str = "") -> dict:
     if tool_call.name not in {
         "getSiteOverview",
@@ -44,8 +39,9 @@ async def execute_tool(tool_call: ToolCall, context: dict, user_message: str = "
     site_id = context.get("site_id")
     if not isinstance(site_id, str) or not site_id:
         raise AgentError("AI_SITE_ASSIGNMENT_REQUIRED", "The administrator has no active site assignment", 403)
-    if tool_call.name in WRITE_TOOLS - {"createFair"} and not CONFIRMATION.search(user_message):
-        raise AgentError("AI_CONFIRMATION_REQUIRED", "Explicit confirmation is required before creating records", 409)
+    # Python never writes directly: write tools are sent to Node, which turns
+    # them into a pending proposal. The real execution happens only after the
+    # administrator confirms in the Node orchestration layer.
     scope_arguments = {
         "site_id",
         "siteId",

@@ -2,6 +2,11 @@ import crypto from 'node:crypto';
 import { AgentError } from './errors.js';
 
 export const isFairConfirmation = (message) => /\b(confirmo|confirmar|sí confirmo|si confirmo|adelante)\b/i.test(message);
+export const isExplicitAffirmation = (message) => {
+  const text = String(message || '').trim().toLowerCase();
+  if (!text || text.length > 40 || text.includes('?')) return false;
+  return /^(s[ií]|ok(ay)?|dale|de acuerdo|confirmo|confirmar|adelante|procede|hazlo|correcto|exacto|est[aá] bien|as[ií] es)(?:[\s,]+(?:por favor|gracias|confirmo|confirmar|adelante|s[ií]|si|de acuerdo|hazlo|procede))*(?:[.!]*)$/i.test(text);
+};
 export const isFairCancellation = (message) => /\b(cancelar|cancela|no crear|olvídalo|olvidalo)\b/i.test(message);
 export const isFairResume = (message) => /\b(continuar|retomar|ver resumen|revisar propuesta)\b/i.test(message);
 const allowedFields = new Set(['name', 'description', 'image_url', 'starts_at', 'ends_at', 'registration_deadline']);
