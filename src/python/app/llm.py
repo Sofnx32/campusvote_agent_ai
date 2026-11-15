@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 import uuid
 
 import httpx
@@ -135,22 +136,34 @@ class OpenAICompatibleProvider(LLMProvider):
                 {"type": "function", "function": tool_schema(name)} for name in TOOLS
             ]
             payload["tool_choice"] = "auto"
+        # Total budget shared by the primary attempt and the fallback, so a slow
+        # primary cannot swallow the whole turn before the secondary is tried.
+        budget_ends = time.monotonic() + settings.llm_total_budget_seconds
         try:
-            return await self._send(settings.llm_url, settings.llm_model, settings.llm_api_key, payload)
+            return await self._send(
+                settings.llm_url, settings.llm_model, settings.llm_api_key, payload,
+                timeout=min(settings.llm_timeout_seconds, settings.llm_total_budget_seconds),
+            )
         except AgentError as error:
             fallback = fallback_endpoint()
             if fallback is None or error.code not in FALLBACK_ERROR_CODES:
+                raise
+            remaining = budget_ends - time.monotonic()
+            if remaining < 1:
                 raise
             url, model, api_key = fallback
             logger.warning(
                 "llm_fallback_engaged requestId=%s primary_model=%s fallback_model=%s cause=%s",
                 request_id_context.get(), settings.llm_model, model, error.code,
             )
-            return await self._send(url, model, api_key, {**payload, "model": model})
+            return await self._send(
+                url, model, api_key, {**payload, "model": model},
+                timeout=min(settings.llm_timeout_seconds, remaining),
+            )
 
-    async def _send(self, url: str, model: str, api_key: str, payload: dict) -> LLMResult:
+    async def _send(self, url: str, model: str, api_key: str, payload: dict, timeout: float | None = None) -> LLMResult:
         try:
-            async with httpx.AsyncClient(timeout=settings.llm_timeout_seconds) as client:
+            async with httpx.AsyncClient(timeout=timeout or settings.llm_timeout_seconds) as client:
                 response = await client.post(
                     url,
                     json=payload,

@@ -62,6 +62,7 @@ def setup_provider(monkeypatch, response=None, error=None, responses=None, **set
         "llm_fallback_model": "",
         "llm_fallback_api_key": "",
         "llm_timeout_seconds": 2,
+        "llm_total_budget_seconds": 5,
         **settings,
     }
     monkeypatch.setattr(llm, "settings", SimpleNamespace(**values))

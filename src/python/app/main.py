@@ -162,6 +162,7 @@ async def chat(
         history,
         execute_tool,
         max_tool_calls=settings.max_tool_calls,
+        deadline_seconds=settings.agent_deadline_seconds,
     )
     last_action = results[-1].get("data") if results and isinstance(results[-1], dict) else None
     reply_content = (current.content or "").strip()
