@@ -146,6 +146,84 @@ export const genericSummary = (tool, data, proposal = {}) => {
   return { data: values, fields: Object.keys(values).map((name) => ({ name, type: 'text', label: SUMMARY_LABELS[name] ?? name.replaceAll('_', ' '), required: false })) };
 };
 
+const LIST_TOOL_LABELS = {
+  getSiteFairs: { singular: 'feria', plural: 'ferias' },
+  getSiteProjects: { singular: 'proyecto', plural: 'proyectos' },
+  getSiteStands: { singular: 'stand', plural: 'stands' },
+  getSiteResults: { singular: 'resultado', plural: 'resultados' },
+  listTeachingCriteria: { singular: 'criterio docente', plural: 'criterios docentes' },
+  listFairStands: { singular: 'stand', plural: 'stands' },
+  listFairCategories: { singular: 'categoría', plural: 'categorías' },
+  listFairCategoryRubrics: { singular: 'rúbrica', plural: 'rúbricas' },
+};
+
+const listItemFields = (tool, item) => {
+  const base = [];
+  if (tool === 'getSiteFairs' || tool === 'listFairCategories' || tool === 'listFairCategoryRubrics') {
+    base.push({ name: 'name', type: 'text', label: 'Nombre', required: false });
+    base.push({ name: 'description', type: 'textarea', label: 'Descripción', required: false });
+  }
+  if (tool === 'getSiteFairs') {
+    base.push({ name: 'status', type: 'text', label: 'Estado', required: false });
+    base.push({ name: 'starts_at', type: 'datetime', label: 'Inicio', required: false });
+    base.push({ name: 'ends_at', type: 'datetime', label: 'Fin', required: false });
+    base.push({ name: 'project_count', type: 'number', label: 'Proyectos', required: false });
+  }
+  if (tool === 'getSiteProjects') {
+    base.push({ name: 'code', type: 'text', label: 'Código', required: false });
+    base.push({ name: 'description', type: 'textarea', label: 'Descripción', required: false });
+    base.push({ name: 'fair_name', type: 'text', label: 'Feria', required: false });
+  }
+  if (tool === 'getSiteStands' || tool === 'listFairStands') {
+    base.push({ name: 'code', type: 'text', label: 'Código', required: false });
+    base.push({ name: 'description', type: 'textarea', label: 'Descripción', required: false });
+    base.push({ name: 'fair_name', type: 'text', label: 'Feria', required: false });
+  }
+  if (tool === 'listTeachingCriteria') {
+    base.push({ name: 'name', type: 'text', label: 'Nombre', required: false });
+    base.push({ name: 'description', type: 'textarea', label: 'Descripción', required: false });
+    base.push({ name: 'points', type: 'number', label: 'Puntos', required: false });
+    base.push({ name: 'is_active', type: 'text', label: 'Estado', required: false });
+  }
+  return base;
+};
+
+const formatListItem = (tool, item) => {
+  const formatted = { ...item };
+  if (tool === 'getSiteFairs' && item.status) {
+    formatted.status = FAIR_STATUS[item.status]?.label ?? item.status;
+  }
+  if (tool === 'listTeachingCriteria' && typeof item.is_active === 'boolean') {
+    formatted.is_active = item.is_active ? 'Activo' : 'Inactivo';
+  }
+  return formatted;
+};
+
+export const buildFairListView = ({ fairs = [], tool, totalCount = 0 } = {}) => {
+  const labels = LIST_TOOL_LABELS[tool] || { singular: 'elemento', plural: 'elementos' };
+  const count = Number.isFinite(totalCount) ? totalCount : fairs.length;
+  const hasItems = fairs.length > 0;
+  const message = hasItems
+    ? `Se encontraron ${count} ${count === 1 ? labels.singular : labels.plural}.`
+    : `No hay ${labels.plural} registradas.`;
+
+  const fields = hasItems ? listItemFields(tool, fairs[0]) : [];
+  const data = hasItems ? fairs.map((item) => formatListItem(tool, item)) : [];
+
+  return {
+    message,
+    ui: {
+      type: 'list',
+      schema: { title: `Lista de ${labels.plural}`, fields },
+      data,
+      links: [],
+      suggestions: hasItems ? [{ label: `Ver ${labels.singular}`, message: `Quiero ver los detalles de la primera ${labels.singular}.` }] : [],
+      technical: { tool: tool ?? 'unknown', returned_count: fairs.length, total_count: count },
+      actions: [],
+    },
+  };
+};
+
 export const buildOperationResult = ({ tool, data, proposal = {}, operationId } = {}) => {
   const fair = fairSummary(data);
   const fairTool = tool === 'createFair' || tool === 'updateFair' || tool === 'changeFairStatus';
