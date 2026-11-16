@@ -26,6 +26,8 @@ export const PUBLIC_ERROR_MESSAGES = Object.freeze({
   AI_ORGANIZATION_REQUIRED: 'Tu cuenta no tiene una organización activa asignada.',
   AI_SITE_ASSIGNMENT_REQUIRED: 'Tu cuenta no tiene una sede activa asignada.',
   AI_INVALID_REQUEST: 'Revisa la información ingresada.',
+  AI_TOOL_NOT_FOUND: 'Esa acción no está disponible en el asistente.',
+  AI_RESPONSE_INVALID: 'El asistente no pudo procesar una respuesta válida. Inténtalo nuevamente.',
   AI_CONFIRMATION_REQUIRED: 'La propuesta cambió o venció. Revísala y confirma nuevamente.',
   AI_OPERATION_CONFLICT: 'No se pudo completar la operación por un conflicto con los datos actuales.',
   AI_RESOURCE_NOT_FOUND: 'No se encontró el recurso solicitado.',

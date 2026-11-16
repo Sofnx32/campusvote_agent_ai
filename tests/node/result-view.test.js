@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildOperationResult, fairSummary, sanitizeTechnical } from '../../src/node/views/result-view.js';
+import { buildOperationResult, buildFairListView as buildChatList, fairSummary, panelUi, sanitizeTechnical } from '../../src/node/views/result-view.js';
 import { buildFairListView } from '../../src/node/views/fair-list-view.js';
 
 const backendFair = {
@@ -273,4 +273,43 @@ test('buildFairListView shows showing count when total exceeds items', () => {
   assert.equal(ui.data.items.length, 5);
   assert.equal(ui.data.total, 50);
   assert.match(message, /mostrando 5/);
+});
+
+test('chat list stays a message the panel can render', () => {
+  const { message, ui } = buildChatList({
+    fairs: [{ name: 'Feria de Ciencias', status: 'OPEN', project_count: 4 }],
+    tool: 'getSiteFairs',
+    totalCount: 1,
+  });
+  assert.equal(ui.type, 'message');
+  assert.equal(ui.schema, null);
+  assert.equal(ui.data, null);
+  assert.deepEqual(ui.actions, []);
+  assert.match(message, /Feria de Ciencias/);
+  assert.match(message, /abierta/);
+});
+
+test('panelUi drops fields the site panel rejects', () => {
+  const ui = panelUi({
+    type: 'list',
+    schema: {
+      title: 'Crear feria',
+      description: 'No va al panel',
+      fields: [
+        { name: 'starts_at', type: 'datetime', label: 'Inicio', required: false },
+        { name: 'image_url', type: 'image', label: 'Portada', required: true },
+      ],
+    },
+    data: [{ name: 'no' }],
+    links: [{ href: '/admin' }],
+    suggestions: [],
+    technical: { tool: 'getSiteFairs' },
+    actions: ['confirm', 'print'],
+  });
+  assert.equal(ui.type, 'message');
+  assert.equal(ui.data, null);
+  assert.equal(ui.schema.fields[0].type, 'text');
+  assert.deepEqual(ui.actions, ['confirm']);
+  assert.equal('links' in ui, false);
+  assert.equal('description' in ui.schema, false);
 });

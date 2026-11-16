@@ -167,7 +167,10 @@ async def chat(
     )
     last_result = results[-1] if results and isinstance(results[-1], dict) else None
     last_action = last_result.get("data") if last_result else None
-    last_tool = last_result.get("tool") if last_result else None
+    last_meta = last_result.get("meta") if last_result and isinstance(last_result.get("meta"), dict) else {}
+    last_tool = (last_result.get("tool") if last_result else None) or last_meta.get("tool")
+    if not last_tool and isinstance(last_action, dict):
+        last_tool = last_action.get("tool")
     list_tools = {
         "getSiteFairs", "getSiteProjects", "getSiteStands", "getSiteResults",
         "listTeachingCriteria", "listFairStands", "listFairCategories", "listFairCategoryRubrics"
@@ -184,6 +187,8 @@ async def chat(
                 if isinstance(reason, str) and reason.strip()
                 else "No pude completar la operación con esos datos. Revísalos e inténtalo de nuevo."
             )
+        elif last_tool in list_tools:
+            reply_content = "Consulté el listado solicitado."
         else:
             raise AgentError("AI_RESPONSE_INVALID", "LLM returned no content", 502)
     if isinstance(last_action, dict) and last_action.get("status") == "confirmation_required" and last_action.get("tool") == "createFair":
@@ -203,9 +208,9 @@ async def chat(
             fields = [
                 {"name": "name", "type": "text", "label": "Nombre", "required": True, "max_length": 200},
                 {"name": "description", "type": "textarea", "label": "Descripción", "required": False, "max_length": 5000},
-                {"name": "starts_at", "type": "datetime", "label": "Inicio (fecha y hora)", "required": False},
-                {"name": "ends_at", "type": "datetime", "label": "Fin (fecha y hora)", "required": False},
-                {"name": "registration_deadline", "type": "datetime", "label": "Cierre de inscripción", "required": False},
+                {"name": "starts_at", "type": "text", "label": "Inicio (fecha y hora)", "required": False},
+                {"name": "ends_at", "type": "text", "label": "Fin (fecha y hora)", "required": False},
+                {"name": "registration_deadline", "type": "text", "label": "Cierre de inscripción", "required": False},
                 {"name": "image_url", "type": "image", "label": "Portada", "required": True},
             ]
             title = "Crear feria"
@@ -233,7 +238,7 @@ async def chat(
                 "registration_deadline": "Cierre de inscripción (fecha y hora)",
             }
             fields = [
-                {"name": key, "type": "number" if key in {"min_score", "max_score", "position"} else "datetime" if key in {"starts_at", "ends_at", "registration_deadline"} else "select" if key == "status" else "textarea" if key == "description" else "text",
+                {"name": key, "type": "number" if key in {"min_score", "max_score", "position"} else "text" if key in {"starts_at", "ends_at", "registration_deadline"} else "select" if key == "status" else "textarea" if key == "description" else "text",
                  "label": labels.get(key, key.replace("_", " ").capitalize()), "required": False,
                  **({"options": [{"value": status, "label": status} for status in ["DRAFT", "OPEN", "CLOSED"]]} if key == "status" else {}),
                  **({"max_length": 5000} if key == "description" else {})}

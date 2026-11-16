@@ -37,7 +37,15 @@ async def execute_tool(tool_call: ToolCall, context: dict, user_message: str = "
         "listFairCategoryRubrics",
         "listTeachingCriteria",
     }:
-        raise AgentError("AI_TOOL_NOT_FOUND", "Tool is not allowlisted", 404)
+        return {
+            "success": False,
+            "tool": tool_call.name,
+            "data": None,
+            "error": {
+                "code": "AI_TOOL_NOT_FOUND",
+                "message": "Esa acción no está disponible. Responde en español y ofrece solo ferias, proyectos, stands, resultados, rúbricas y criterios docentes.",
+            },
+        }
     site_id = context.get("site_id")
     if not isinstance(site_id, str) or not site_id:
         raise AgentError("AI_SITE_ASSIGNMENT_REQUIRED", "The administrator has no active site assignment", 403)

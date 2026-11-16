@@ -6,7 +6,7 @@ import { extractBearer, verifyUser, validateActor, signContext, verifyContext } 
 import { ReplayStore } from '../state/replay-store.js';
 import { BackendAdapter } from '../services/backend-adapter.js';
 import { fairActionScopeKey, operationDigest, isExplicitAffirmation, isFairCancellation, isFairConfirmation, isFairResume, preserveUploadedFairImage, validateWriteProposal } from '../validators/fair-action.js';
-import { buildOperationResult, buildFairListView } from '../views/result-view.js';
+import { buildOperationResult, buildFairListView, panelUi } from '../views/result-view.js';
 import { httpsDispatcher } from '../config.js';
 
 const tools = new Set([
@@ -38,16 +38,16 @@ function pendingActionUi(pendingAction, siteName) {
   const fields = pendingAction.tool === 'createFair' ? [
     { name: 'name', type: 'text', label: 'Nombre', required: true, max_length: 200 },
     { name: 'description', type: 'textarea', label: 'Descripción', required: false, max_length: 5000 },
-    { name: 'starts_at', type: 'datetime', label: 'Inicio (fecha y hora)', required: false },
-    { name: 'ends_at', type: 'datetime', label: 'Fin (fecha y hora)', required: false },
-    { name: 'registration_deadline', type: 'datetime', label: 'Límite de registro de proyectos', required: false },
+    { name: 'starts_at', type: 'text', label: 'Inicio (fecha y hora)', required: false },
+    { name: 'ends_at', type: 'text', label: 'Fin (fecha y hora)', required: false },
+    { name: 'registration_deadline', type: 'text', label: 'Límite de registro de proyectos', required: false },
     { name: 'image_url', type: 'image', label: 'Portada', required: true },
   ] : Object.entries(proposal)
     .filter(([key]) => !key.endsWith('_id') && key !== 'site_id')
     .map(([key, value]) => ({
       name: key,
       type: key === 'image_url' ? 'image'
-        : ['starts_at', 'ends_at', 'registration_deadline'].includes(key) ? 'datetime'
+        : ['starts_at', 'ends_at', 'registration_deadline'].includes(key) ? 'text'
         : ['min_score', 'max_score', 'points', 'position'].includes(key) ? 'number'
         : key === 'description' ? 'textarea'
         : key === 'status' ? 'select' : 'text',
@@ -123,7 +123,7 @@ export function registerChatRoutes(app, replay, backend) {
         return res.json({
           success: true, conversation_id: conversationId,
           message: { role: 'assistant', content: 'Actualicé la propuesta. Revisa el resumen y confirma para continuar.' },
-          ui: pendingActionUi(updated, actor.siteName),
+          ui: panelUi(pendingActionUi(updated, actor.siteName)),
           operation: { id: updated.operationId, version: updated.version, status: 'awaiting_confirmation' },
           citations: [], suggested_actions: [], meta: { correlation_id: correlationId, tool_calls: 0, truncated: false },
         });
@@ -145,7 +145,7 @@ export function registerChatRoutes(app, replay, backend) {
         return res.json({
           success: true, conversation_id: conversationId,
           message: { role: 'assistant', content: 'Esta es la propuesta pendiente. Puedes editarla, confirmarla o cancelarla.' },
-          ui: pendingActionUi(pendingAction, actor.siteName),
+          ui: panelUi(pendingActionUi(pendingAction, actor.siteName)),
           operation: { id: pendingAction.operationId, version: pendingAction.version, status: 'awaiting_confirmation' },
           citations: [], suggested_actions: [], meta: { correlation_id: correlationId, tool_calls: 0, truncated: false },
         });
@@ -184,7 +184,7 @@ export function registerChatRoutes(app, replay, backend) {
         });
         return res.json({
           success: true, conversation_id: conversationId,
-          message: { role: 'assistant', content: view.message }, ui: view.ui,
+          message: { role: 'assistant', content: view.message }, ui: panelUi(view.ui),
           operation: { id: pendingAction.operationId, version: pendingAction.version, status: 'completed' },
           citations: [], suggested_actions: [], meta: { correlation_id: correlationId, tool_calls: 1, truncated: false },
         });
@@ -214,15 +214,23 @@ export function registerChatRoutes(app, replay, backend) {
         // Transformar respuestas de herramientas de listado (getSiteFairs, etc.) a vista de tarjetas
         const lastTool = response.meta?.last_tool;
         const listTools = new Set(['getSiteFairs', 'getSiteProjects', 'getSiteStands', 'getSiteResults', 'listTeachingCriteria', 'listFairStands', 'listFairCategories', 'listFairCategoryRubrics']);
-        if (listTools.has(lastTool) && response.ui?.type === 'message') {
-          // Para herramientas de listado, Python incluye los datos crudos en meta.tool_data
-          const toolData = response.meta?.tool_data;
-          if (toolData && Array.isArray(toolData)) {
-            const view = buildFairListView({ fairs: toolData, tool: lastTool, totalCount: toolData.length });
-            response.message.content = view.message;
+        const listRows = (value) => {
+          if (Array.isArray(value)) return value;
+          if (!value || typeof value !== 'object') return null;
+          for (const key of ['items', 'fairs', 'projects', 'stands', 'results', 'criteria', 'categories', 'rubrics']) {
+            if (Array.isArray(value[key])) return value[key];
+          }
+          return null;
+        };
+        if (listTools.has(lastTool)) {
+          const rows = listRows(response.meta?.tool_data);
+          if (rows) {
+            const view = buildFairListView({ fairs: rows, tool: lastTool, totalCount: rows.length });
+            if (response.message) response.message.content = view.message;
             response.ui = view.ui;
           }
         }
+        response.ui = panelUi(response.ui);
         return res.json(response);
       } finally {
         await replay.closeRequest(context.jti);
