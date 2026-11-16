@@ -1,4 +1,4 @@
-import { AgentError } from './errors.js';
+import { AgentError } from '../errors.js';
 
 export const readJsonResponse = async (response, service) => {
   const contentType = response.headers?.get?.('content-type')?.toLowerCase() || '';

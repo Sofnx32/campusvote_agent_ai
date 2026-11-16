@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { BackendAdapter } from '../../src/node/backend-adapter.js';
+import { BackendAdapter } from '../../src/node/services/backend-adapter.js';
 
 test('fails closed when the active assignment verifier is not configured', async () => {
   const adapter = new BackendAdapter();

@@ -5,7 +5,7 @@ process.env.NODE_ENV = 'test';
 process.env.CAMPUSVOTE_BACKEND_URL = 'https://backend.test';
 process.env.CAMPUSVOTE_RESOLVE_CONTEXT_PATH = '/api/internal/ai/site/context';
 
-const { BackendAdapter } = await import('../../src/node/backend-adapter.js');
+const { BackendAdapter } = await import('../../src/node/services/backend-adapter.js');
 
 const jsonResponse = (body, status = 200) => new Response(JSON.stringify(body), {
   status,

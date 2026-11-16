@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readJsonResponse } from '../../src/node/http-response.js';
+import { readJsonResponse } from '../../src/node/utils/http-response.js';
 
 const response = (contentType, json) => ({
   headers: new Headers({ 'content-type': contentType }),

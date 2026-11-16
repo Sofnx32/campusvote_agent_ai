@@ -1,6 +1,6 @@
 import Redis from 'ioredis';
-import { config } from './config.js';
-import { AgentError } from './errors.js';
+import { config } from '../config.js';
+import { AgentError } from '../errors.js';
 
 const memory = new Map();
 const pendingActions = new Map();

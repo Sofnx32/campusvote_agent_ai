@@ -10,6 +10,9 @@ from dotenv import load_dotenv
 # Render no existe y las variables llegan por el entorno). Las variables ya
 # exportadas por el sistema tienen prioridad (override=False), como en producción.
 def _load_repository_env() -> None:
+    # Skip loading .env during tests to avoid interfering with test mocks
+    if os.getenv("PYTEST_CURRENT_TEST") or os.getenv("TESTING"):
+        return
     for parent in Path(__file__).resolve().parents:
         candidate = parent / ".env"
         if candidate.is_file():

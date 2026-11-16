@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { ReplayStore } from '../../src/node/replay-store.js';
+import { ReplayStore } from '../../src/node/state/replay-store.js';
 
 test('atomically consumes once and rejects duplicate tool calls', async () => {
   const store = new ReplayStore();

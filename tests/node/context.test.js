@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { validateActor } from '../../src/node/context.js';
+import { validateActor } from '../../src/node/utils/context.js';
 
 test('accepts an authoritative single-site ADMIN SITE context resolved by CampusVote', () => {
   const actor = validateActor({
@@ -27,6 +27,17 @@ test('accepts camelCase context for local adapters', () => {
   });
   assert.equal(actor.userId, 'user-1');
   assert.equal(actor.siteId, 'site-1');
+});
+
+test('keeps the organization timezone for date normalization when present', () => {
+  const actor = validateActor({
+    user_id: 'user-1', role: 'ADMIN', scope_level: 'SITE',
+    organization_id: 'org-1', site_id: 'site-1', timezone: ' America/Lima ',
+  });
+  assert.equal(actor.timezone, 'America/Lima');
+  assert.equal('timezone' in validateActor({
+    user_id: 'user-1', role: 'ADMIN', scope_level: 'SITE', organization_id: 'org-1', site_id: 'site-1',
+  }), false);
 });
 
 test('rejects legacy accounts with more than one active site', () => {

@@ -6,7 +6,7 @@ process.env.CAMPUSVOTE_BACKEND_URL = 'https://backend.test';
 process.env.CAMPUSVOTE_VERIFY_SITE_PATH = '/api/internal/ai/site/verify';
 process.env.CAMPUSVOTE_VERIFY_FAIR_PATH = '/api/fairs/:fairId';
 
-const { BackendAdapter } = await import('../../src/node/backend-adapter.js');
+const { BackendAdapter } = await import('../../src/node/services/backend-adapter.js');
 
 test('sends site_id when verifying the active assignment', async () => {
   let requested;

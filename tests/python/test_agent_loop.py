@@ -1,4 +1,5 @@
 import asyncio
+import json
 
 import pytest
 
@@ -104,3 +105,53 @@ def test_loop_stops_when_the_deadline_is_exceeded():
         ))
 
     assert error.value.code == "AI_DEADLINE_EXCEEDED"
+
+
+def test_loop_returns_correctable_tool_errors_to_the_model():
+    provider = ScriptedProvider([
+        LLMResult(tool_calls=[ToolCall(id="call-1", name="createFair", arguments={"starts_at": "2026-11-20"})]),
+        LLMResult(content="¿A qué hora inicia y termina la feria?"),
+    ])
+
+    async def execute(tool_call, context, message):
+        raise AgentError(
+            "AI_INVALID_REQUEST",
+            "Indica la hora de inicio",
+            400,
+            public_message="Indica la hora de inicio de la feria.",
+            details={"field": "starts_at"},
+        )
+
+    result, results = run(run_agent_turn(
+        provider,
+        {"site_id": "site-a"},
+        "crea una feria el 20 de noviembre",
+        [],
+        execute,
+        max_tool_calls=5,
+    ))
+
+    assert result.content.startswith("¿A qué hora")
+    assert results[0]["success"] is False
+    tool_message = provider.calls[1]["messages"][-1]
+    assert tool_message["role"] == "tool"
+    payload = json.loads(tool_message["content"])
+    assert payload["error"] == {
+        "code": "AI_INVALID_REQUEST",
+        "message": "Indica la hora de inicio de la feria.",
+        "details": {"field": "starts_at"},
+    }
+
+
+def test_loop_still_aborts_on_non_correctable_tool_errors():
+    provider = ScriptedProvider([
+        LLMResult(tool_calls=[ToolCall(id="call-1", name="createFair", arguments={})]),
+    ])
+
+    async def execute(tool_call, context, message):
+        raise AgentError("AI_SCOPE_FORBIDDEN", "Sede no autorizada", 403)
+
+    with pytest.raises(AgentError) as error:
+        run(run_agent_turn(provider, {"site_id": "site-a"}, "crea", [], execute, max_tool_calls=5))
+
+    assert error.value.code == "AI_SCOPE_FORBIDDEN"

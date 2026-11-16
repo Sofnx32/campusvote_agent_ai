@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import express from 'express';
-import { jsonParserErrorHandler } from '../../src/node/http-middleware.js';
+import { jsonParserErrorHandler } from '../../src/node/utils/http-middleware.js';
 
 test('malformed JSON receives the agent JSON error contract, not Express HTML', async (t) => {
   const app = express();

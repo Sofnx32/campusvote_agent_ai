@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import { AgentError, errorResponse } from './errors.js';
+import { AgentError, errorResponse } from '../errors.js';
 
 export const jsonParserErrorHandler = (error, req, res, next) => {
   if (error?.type !== 'entity.parse.failed' && !(error instanceof SyntaxError && Object.hasOwn(error, 'body'))) return next(error);

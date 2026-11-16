@@ -18,3 +18,14 @@ test('known provider, timeout, authorization and Redis errors map to stable publ
   assert.equal(publicError(Object.assign(new Error('redis'), { name: 'MaxRetriesPerRequestError' })).code, 'REDIS_UNAVAILABLE');
   assert.equal(publicError(new AgentError('AI_SCOPE_FORBIDDEN', 'internal details', 403)).status, 403);
 });
+
+test('validation errors keep their safe field message and details', () => {
+  const error = publicError(new AgentError('AI_INVALID_REQUEST', 'Invalid date: starts_at', 400, false, {
+    publicMessage: 'Indica la hora de inicio de la feria.',
+    details: { field: 'starts_at' },
+  }));
+  const body = errorResponse(error, 'req-400');
+  assert.equal(body.error.message, 'Indica la hora de inicio de la feria.');
+  assert.deepEqual(body.error.details, { field: 'starts_at' });
+  assert.equal(JSON.stringify(body).includes('Invalid date'), false);
+});

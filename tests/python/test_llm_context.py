@@ -1,4 +1,10 @@
-from app.llm import TOOLS, site_instructions, tool_schema
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
+
+from app.prompts import site_instructions
+from app.tool_schemas import tool_schema
+from app.providers.openai_compatible import TOOLS
 
 
 def test_tool_schemas_do_not_accept_scope_identifiers_from_the_model():

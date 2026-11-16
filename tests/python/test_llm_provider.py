@@ -1,12 +1,14 @@
 import asyncio
 import json
+import sys
+from pathlib import Path
 from types import SimpleNamespace
+
+# Add project root to path
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 
 import httpx
 import pytest
-
-from app import llm
-from app.errors import AgentError
 
 
 class MockResponse:
@@ -46,28 +48,6 @@ class MockClient:
         return self.response
 
 
-def setup_provider(monkeypatch, response=None, error=None, responses=None, **settings):
-    monkeypatch.setattr(llm.httpx, "AsyncClient", MockClient)
-    MockClient.response = response
-    MockClient.responses = list(responses) if responses else None
-    MockClient.error = error
-    MockClient.request = None
-    MockClient.requests = []
-    values = {
-        "llm_provider": "openai-compatible",
-        "llm_url": "https://llm.example/v1/chat/completions",
-        "llm_model": "model-x",
-        "llm_api_key": "secret-test-key",
-        "llm_fallback_url": "",
-        "llm_fallback_model": "",
-        "llm_fallback_api_key": "",
-        "llm_timeout_seconds": 2,
-        "llm_total_budget_seconds": 5,
-        **settings,
-    }
-    monkeypatch.setattr(llm, "settings", SimpleNamespace(**values))
-
-
 def run(coro):
     return asyncio.run(coro)
 
@@ -79,12 +59,55 @@ def tool_call_payload(calls):
     ]}}]}
 
 
+def setup_provider(monkeypatch, response=None, error=None, responses=None, **settings):
+    """Set up test provider by patching environment variables and module cache."""
+    # Clear module cache so modules re-import with patched settings
+    for mod in list(sys.modules.keys()):
+        if mod.startswith("app.providers.") or mod == "app.config" or mod == "app.llm":
+            del sys.modules[mod]
+    
+    # Patch environment variables BEFORE importing
+    defaults = {
+        "LLM_PROVIDER": "openai-compatible",
+        "LLM_URL": "https://llm.example/v1/chat/completions",
+        "LLM_MODEL": "model-x",
+        "LLM_API_KEY": "secret-test-key",
+        "LLM_FALLBACK_URL": "",
+        "LLM_FALLBACK_MODEL": "",
+        "LLM_FALLBACK_API_KEY": "",
+        "LLM_TIMEOUT_SECONDS": "2",
+        "LLM_TOTAL_BUDGET_SECONDS": "5",
+    }
+    for key, value in {**defaults, **settings}.items():
+        monkeypatch.setenv(key, value)
+    
+    # Also patch httpx client
+    monkeypatch.setattr("app.providers.openai_compatible.httpx.AsyncClient", MockClient)
+    MockClient.response = response
+    MockClient.responses = list(responses) if responses else None
+    MockClient.error = error
+    MockClient.request = None
+    MockClient.requests = []
+    
+    # Now import after patching
+    from app.providers.openai_compatible import OpenAICompatibleProvider
+    from app.errors import AgentError
+    return OpenAICompatibleProvider, AgentError
+
+
+FALLBACK_CONFIG = {
+    "LLM_FALLBACK_URL": "https://fallback.example/v1/chat/completions",
+    "LLM_FALLBACK_MODEL": "fallback-model",
+    "LLM_FALLBACK_API_KEY": "fallback-key",
+}
+
+
 def test_openai_compatible_success_and_ferias_tool_intent(monkeypatch):
-    setup_provider(monkeypatch, MockResponse(payload=tool_call_payload([
+    OpenAICompatibleProvider, AgentError = setup_provider(monkeypatch, MockResponse(payload=tool_call_payload([
         ("call-1", "getSiteFairs", {}),
     ])))
 
-    result = run(llm.OpenAICompatibleProvider().complete(
+    result = run(OpenAICompatibleProvider().complete(
         {"site_id": "site-a", "site_name": "Sede Norte"},
         [{"role": "user", "content": "ferias"}],
     ))
@@ -106,12 +129,12 @@ def test_openai_compatible_success_and_ferias_tool_intent(monkeypatch):
 
 
 def test_provider_supports_multiple_tool_calls_in_one_turn(monkeypatch):
-    setup_provider(monkeypatch, MockResponse(payload=tool_call_payload([
+    OpenAICompatibleProvider, _ = setup_provider(monkeypatch, MockResponse(payload=tool_call_payload([
         ("call-1", "getSiteOverview", {}),
         ("call-2", "getSiteFairs", {}),
     ])))
 
-    result = run(llm.OpenAICompatibleProvider().complete(
+    result = run(OpenAICompatibleProvider().complete(
         {"site_id": "site-a"}, [{"role": "user", "content": "resumen y ferias"}],
     ))
 
@@ -124,9 +147,9 @@ def test_provider_supports_multiple_tool_calls_in_one_turn(monkeypatch):
 
 
 def test_provider_forces_a_text_answer_when_tools_are_disabled(monkeypatch):
-    setup_provider(monkeypatch, MockResponse(payload={"choices": [{"message": {"content": "Listo."}}]}))
+    OpenAICompatibleProvider, _ = setup_provider(monkeypatch, MockResponse(payload={"choices": [{"message": {"content": "Listo."}}]}))
 
-    result = run(llm.OpenAICompatibleProvider().complete(
+    result = run(OpenAICompatibleProvider().complete(
         {"site_id": "site-a"}, [{"role": "user", "content": "hola"}], allow_tools=False,
     ))
 
@@ -136,7 +159,8 @@ def test_provider_forces_a_text_answer_when_tools_are_disabled(monkeypatch):
 
 
 def test_create_fair_schema_leaves_cover_to_the_authenticated_upload_card():
-    schema = llm.tool_schema("createFair")
+    from app.tool_schemas import tool_schema
+    schema = tool_schema("createFair")
     assert schema["parameters"]["required"] == ["name"]
     assert "image_url" in schema["parameters"]["properties"]
     assert "No inventes image_url" in schema["description"]
@@ -153,10 +177,10 @@ def test_create_fair_schema_leaves_cover_to_the_authenticated_upload_card():
     (500, "LLM_PROVIDER_UNAVAILABLE"),
 ])
 def test_provider_http_errors_are_classified(monkeypatch, status, code):
-    setup_provider(monkeypatch, MockResponse(status=status, payload={"error": "private response"}))
+    OpenAICompatibleProvider, AgentError = setup_provider(monkeypatch, MockResponse(status=status, payload={"error": "private response"}))
 
     with pytest.raises(AgentError) as error:
-        run(llm.OpenAICompatibleProvider().complete({"site_id": "site-a"}, [{"role": "user", "content": "ferias"}]))
+        run(OpenAICompatibleProvider().complete({"site_id": "site-a"}, [{"role": "user", "content": "ferias"}]))
 
     assert error.value.code == code
     if status == 429:
@@ -164,53 +188,46 @@ def test_provider_http_errors_are_classified(monkeypatch, status, code):
 
 
 def test_provider_timeout_is_classified(monkeypatch):
-    setup_provider(monkeypatch, error=httpx.ReadTimeout("timeout"))
+    OpenAICompatibleProvider, AgentError = setup_provider(monkeypatch, error=httpx.ReadTimeout("timeout"))
 
     with pytest.raises(AgentError) as error:
-        run(llm.OpenAICompatibleProvider().complete({"site_id": "site-a"}, [{"role": "user", "content": "ferias"}]))
+        run(OpenAICompatibleProvider().complete({"site_id": "site-a"}, [{"role": "user", "content": "ferias"}]))
 
     assert error.value.code == "LLM_PROVIDER_TIMEOUT"
 
 
 @pytest.mark.parametrize("payload", [ValueError("invalid JSON"), {}, {"choices": []}, {"choices": [{"message": None}]}])
 def test_invalid_provider_responses_are_classified(monkeypatch, payload):
-    setup_provider(monkeypatch, MockResponse(payload=payload))
+    OpenAICompatibleProvider, AgentError = setup_provider(monkeypatch, MockResponse(payload=payload))
 
     with pytest.raises(AgentError) as error:
-        run(llm.OpenAICompatibleProvider().complete({"site_id": "site-a"}, [{"role": "user", "content": "ferias"}]))
+        run(OpenAICompatibleProvider().complete({"site_id": "site-a"}, [{"role": "user", "content": "ferias"}]))
 
     assert error.value.code == "LLM_INVALID_RESPONSE"
 
 
 def test_unknown_tool_names_are_rejected(monkeypatch):
-    setup_provider(monkeypatch, MockResponse(payload=tool_call_payload([
+    OpenAICompatibleProvider, AgentError = setup_provider(monkeypatch, MockResponse(payload=tool_call_payload([
         ("call-1", "dropDatabase", {}),
     ])))
 
     with pytest.raises(AgentError) as error:
-        run(llm.OpenAICompatibleProvider().complete({"site_id": "site-a"}, [{"role": "user", "content": "x"}]))
+        run(OpenAICompatibleProvider().complete({"site_id": "site-a"}, [{"role": "user", "content": "x"}]))
 
     assert error.value.code == "AI_TOOL_NOT_FOUND"
 
 
 def test_missing_configuration_has_specific_error(monkeypatch):
-    setup_provider(monkeypatch, llm_api_key="")
+    OpenAICompatibleProvider, AgentError = setup_provider(monkeypatch, LLM_API_KEY="")
 
     with pytest.raises(AgentError) as error:
-        run(llm.OpenAICompatibleProvider().complete({"site_id": "site-a"}, [{"role": "user", "content": "ferias"}]))
+        run(OpenAICompatibleProvider().complete({"site_id": "site-a"}, [{"role": "user", "content": "ferias"}]))
 
     assert error.value.code == "LLM_CONFIG_MISSING"
 
 
-FALLBACK_CONFIG = {
-    "llm_fallback_url": "https://fallback.example/v1/chat/completions",
-    "llm_fallback_model": "fallback-model",
-    "llm_fallback_api_key": "fallback-key",
-}
-
-
 def test_rate_limited_primary_engages_the_fallback_provider(monkeypatch):
-    setup_provider(
+    OpenAICompatibleProvider, _ = setup_provider(
         monkeypatch,
         responses=[
             MockResponse(status=429, payload={"error": "quota"}),
@@ -219,7 +236,7 @@ def test_rate_limited_primary_engages_the_fallback_provider(monkeypatch):
         **FALLBACK_CONFIG,
     )
 
-    result = run(llm.OpenAICompatibleProvider().complete(
+    result = run(OpenAICompatibleProvider().complete(
         {"site_id": "site-a"}, [{"role": "user", "content": "hola"}],
     ))
 
@@ -235,7 +252,7 @@ def test_rate_limited_primary_engages_the_fallback_provider(monkeypatch):
 
 
 def test_fallback_keeps_the_openai_tool_protocol_messages(monkeypatch):
-    setup_provider(
+    OpenAICompatibleProvider, _ = setup_provider(
         monkeypatch,
         responses=[
             MockResponse(status=503, payload={"error": "down"}),
@@ -244,7 +261,7 @@ def test_fallback_keeps_the_openai_tool_protocol_messages(monkeypatch):
         **FALLBACK_CONFIG,
     )
 
-    result = run(llm.OpenAICompatibleProvider().complete(
+    result = run(OpenAICompatibleProvider().complete(
         {"site_id": "site-a"}, [{"role": "user", "content": "ferias"}],
     ))
 
@@ -253,36 +270,36 @@ def test_fallback_keeps_the_openai_tool_protocol_messages(monkeypatch):
 
 
 def test_primary_error_is_propagated_without_fallback_configuration(monkeypatch):
-    setup_provider(monkeypatch, MockResponse(status=429, payload={"error": "quota"}))
+    OpenAICompatibleProvider, AgentError = setup_provider(monkeypatch, MockResponse(status=429, payload={"error": "quota"}))
 
     with pytest.raises(AgentError) as error:
-        run(llm.OpenAICompatibleProvider().complete({"site_id": "site-a"}, [{"role": "user", "content": "hola"}]))
+        run(OpenAICompatibleProvider().complete({"site_id": "site-a"}, [{"role": "user", "content": "hola"}]))
 
     assert error.value.code == "LLM_RATE_LIMITED"
     assert len(MockClient.requests) == 1
 
 
 def test_invalid_primary_response_does_not_engage_the_fallback(monkeypatch):
-    setup_provider(monkeypatch, MockResponse(payload={"choices": []}), **FALLBACK_CONFIG)
+    OpenAICompatibleProvider, AgentError = setup_provider(monkeypatch, MockResponse(payload={"choices": []}), **FALLBACK_CONFIG)
 
     with pytest.raises(AgentError) as error:
-        run(llm.OpenAICompatibleProvider().complete({"site_id": "site-a"}, [{"role": "user", "content": "hola"}]))
+        run(OpenAICompatibleProvider().complete({"site_id": "site-a"}, [{"role": "user", "content": "hola"}]))
 
     assert error.value.code == "LLM_INVALID_RESPONSE"
     assert len(MockClient.requests) == 1
 
 
 def test_fallback_requires_url_model_and_key_together(monkeypatch):
-    setup_provider(
+    OpenAICompatibleProvider, AgentError = setup_provider(
         monkeypatch,
         MockResponse(status=429, payload={"error": "quota"}),
-        llm_fallback_url="https://fallback.example/v1/chat/completions",
-        llm_fallback_model="fallback-model",
-        llm_fallback_api_key="",
+        LLM_FALLBACK_URL="https://fallback.example/v1/chat/completions",
+        LLM_FALLBACK_MODEL="fallback-model",
+        LLM_FALLBACK_API_KEY="",
     )
 
     with pytest.raises(AgentError) as error:
-        run(llm.OpenAICompatibleProvider().complete({"site_id": "site-a"}, [{"role": "user", "content": "hola"}]))
+        run(OpenAICompatibleProvider().complete({"site_id": "site-a"}, [{"role": "user", "content": "hola"}]))
 
     assert error.value.code == "LLM_RATE_LIMITED"
     assert len(MockClient.requests) == 1

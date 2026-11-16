@@ -3,7 +3,7 @@ import uuid
 import httpx
 
 from .config import settings
-from .errors import AgentError
+from .errors import AgentError, CORRECTABLE_CODES
 from .models import ToolCall
 
 WRITE_TOOLS = {
@@ -22,6 +22,8 @@ WRITE_TOOLS = {
     "toggleTeachingCriterion",
     "deleteTeachingCriterion",
 }
+
+
 async def execute_tool(tool_call: ToolCall, context: dict, user_message: str = "") -> dict:
     if tool_call.name not in {
         "getSiteOverview",
@@ -90,5 +92,18 @@ async def execute_tool(tool_call: ToolCall, context: dict, user_message: str = "
     if response.status_code >= 400:
         payload = response.json()
         details = payload.get("error", {})
-        raise AgentError(details.get("code", "AI_TOOL_UNAVAILABLE"), details.get("message", "Tool failed"), response.status_code, details.get("retryable", False))
+        code = details.get("code", "AI_TOOL_UNAVAILABLE")
+        message = details.get("message", "Tool failed")
+        # Los 4xx de validación/negocio traen un mensaje seguro y accionable
+        # (qué campo falló). Se propaga para que el usuario y el modelo sepan
+        # exactamente qué corregir en lugar de recibir un mensaje genérico.
+        expose = 400 <= response.status_code < 500 and code in CORRECTABLE_CODES
+        raise AgentError(
+            code,
+            message,
+            response.status_code,
+            details.get("retryable", False),
+            public_message=message if expose and isinstance(message, str) else None,
+            details=details.get("details") if isinstance(details.get("details"), (dict, list)) else None,
+        )
     return response.json()

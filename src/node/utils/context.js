@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 import jwt from 'jsonwebtoken';
-import { config } from './config.js';
-import { AgentError } from './errors.js';
+import { config } from '../config.js';
+import { AgentError } from '../errors.js';
 
 const allowedRoles = new Set(['ADMIN']);
 
@@ -62,6 +62,9 @@ export const validateActor = (actor) => {
       : typeof actor.site_name === 'string'
         ? actor.site_name.replace(/\s+/g, ' ').trim()
         : undefined,
+    ...(typeof actor.timezone === 'string' && actor.timezone.trim()
+      ? { timezone: actor.timezone.trim() }
+      : {}),
   };
 };
 
@@ -81,6 +84,7 @@ export const signContext = (actor, correlationId, deadlineAt) => {
       organization_id: actor.organizationId,
       site_id: actor.siteId,
       site_name: actor.siteName,
+      ...(actor.timezone ? { timezone: actor.timezone } : {}),
       correlation_id: correlationId,
       deadline_at: deadlineAt,
       iat: nowSeconds,
@@ -109,6 +113,9 @@ export const verifyContext = (token, options = {}) => {
   }
   if (claims.role !== 'ADMIN' || claims.scope_level !== 'SITE' || !claims.organization_id || typeof claims.site_id !== 'string' || !claims.jti || !claims.correlation_id) {
     throw new AgentError('AI_CONTEXT_INVALID', 'Incomplete AI context', 401);
+  }
+  if (claims.timezone !== undefined && typeof claims.timezone !== 'string') {
+    throw new AgentError('AI_CONTEXT_INVALID', 'Invalid timezone claim', 401);
   }
   if (Date.parse(claims.deadline_at) <= Date.now()) throw new AgentError('AI_DEADLINE_EXCEEDED', 'Request deadline exceeded', 504, true);
   return claims;

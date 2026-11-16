@@ -6,7 +6,7 @@ process.env.CAMPUSVOTE_BACKEND_URL = 'https://backend.test';
 process.env.TOOL_CREATE_FAIR_PATH = '/api/fairs';
 process.env.TOOL_CREATE_FAIR_METHOD = 'POST';
 
-const { BackendAdapter } = await import('../../src/node/backend-adapter.js');
+const { BackendAdapter } = await import('../../src/node/services/backend-adapter.js');
 
 test('creates a fair through the authenticated CampusVote endpoint with scoped site', async () => {
   let request;

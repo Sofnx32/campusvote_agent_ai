@@ -2,12 +2,23 @@ from __future__ import annotations
 
 
 class AgentError(Exception):
-    def __init__(self, code: str, message: str, status: int = 500, retryable: bool = False):
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        status: int = 500,
+        retryable: bool = False,
+        *,
+        public_message: str | None = None,
+        details: object | None = None,
+    ):
         super().__init__(message)
         self.code = code
         self.message = message
         self.status = status
         self.retryable = retryable
+        self.public_message = public_message
+        self.details = details
 
 
 ERROR_CATALOG = {
@@ -21,6 +32,15 @@ ERROR_CATALOG = {
     "REDIS": {"REDIS_UNAVAILABLE", "AI_CONTEXT_REPLAY_STORE_UNAVAILABLE"},
     "BUSINESS_OPERATION": {"AI_CONFIRMATION_REQUIRED", "AI_OPERATION_CONFLICT", "AI_RESOURCE_NOT_FOUND"},
     "INTERNAL": {"AI_INTERNAL_ERROR"},
+}
+
+# Errores de negocio que el modelo puede corregir en el mismo turno (por
+# ejemplo, una fecha con formato inválido o sin hora).
+CORRECTABLE_CODES = {
+    "AI_INVALID_REQUEST",
+    "AI_CONFIRMATION_REQUIRED",
+    "AI_OPERATION_CONFLICT",
+    "AI_RESOURCE_NOT_FOUND",
 }
 
 PUBLIC_MESSAGES = {
@@ -40,14 +60,15 @@ PUBLIC_MESSAGES = {
 
 
 def error_payload(error: AgentError, correlation_id: str | None) -> dict:
+    fallback = "Ocurrió un problema inesperado." if error.status >= 500 else error.message
     return {
         "success": False,
         "error": {
             "code": error.code,
-            "message": PUBLIC_MESSAGES.get(error.code, "Ocurrió un problema inesperado." if error.status >= 500 else error.message),
+            "message": error.public_message or PUBLIC_MESSAGES.get(error.code, fallback),
             "retryable": error.retryable,
             "requestId": correlation_id,
-            "details": None,
+            "details": error.details,
         },
         "requestId": correlation_id,
         "meta": {"correlation_id": correlation_id},

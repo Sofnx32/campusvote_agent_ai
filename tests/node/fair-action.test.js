@@ -10,7 +10,7 @@ import {
   validateWriteProposal,
   validateFairProposal,
   preserveUploadedFairImage,
-} from '../../src/node/fair-action.js';
+} from '../../src/node/validators/fair-action.js';
 
 const context = { sub: 'user-a', organization_id: 'org-a', site_id: 'site-a', conversation_id: 'chat-a' };
 const valid = {
@@ -25,8 +25,59 @@ test('validates and strips server-derived site data from fair proposal', () => {
   assert.deepEqual(validateFairProposal(valid, context), {
     name: 'Feria Tecnológica',
     image_url: 'https://cdn.example/cover.png',
-    starts_at: '2027-05-01T09:00:00Z',
-    ends_at: '2027-05-02T17:00:00Z',
+    starts_at: '2027-05-01T09:00:00.000Z',
+    ends_at: '2027-05-02T17:00:00.000Z',
+  });
+});
+
+test('normalizes fair dates to an absolute UTC instant', () => {
+  const proposal = validateFairProposal({
+    ...valid,
+    starts_at: '2027-05-01T09:00:00-05:00',
+    ends_at: '2027-05-02T17:30',
+    registration_deadline: '2027-04-30',
+  }, { ...context, timezone: 'America/Lima' });
+  assert.equal(proposal.starts_at, '2027-05-01T14:00:00.000Z');
+  // 17:30 en Lima = 22:30 UTC.
+  assert.equal(proposal.ends_at, '2027-05-02T22:30:00.000Z');
+  // Una fecha suelta de cierre se toma al final de ese día local.
+  assert.equal(proposal.registration_deadline, '2027-05-01T04:59:59.000Z');
+});
+
+test('requires a time for the fair start and end dates', () => {
+  for (const field of ['starts_at', 'ends_at']) {
+    assert.throws(
+      () => validateFairProposal({ ...valid, [field]: '2027-05-01' }, context),
+      (error) => error.code === 'AI_INVALID_REQUEST'
+        && error.details?.field === field
+        && /hora/.test(error.publicMessage)
+    );
+  }
+});
+
+test('rejects parseable non-ISO dates instead of guessing their time zone', () => {
+  assert.throws(
+    () => validateFairProposal({ ...valid, starts_at: 'November 20, 2026 08:00' }, context),
+    (error) => error.code === 'AI_INVALID_REQUEST'
+      && error.details?.field === 'starts_at'
+      && /ISO 8601/.test(error.publicMessage)
+  );
+});
+
+test('checks date order after normalization and exposes the failing field', () => {
+  assert.throws(
+    () => validateFairProposal({ ...valid, ends_at: '2027-04-01T00:00:00Z' }, context),
+    (error) => error.code === 'AI_INVALID_REQUEST'
+      && error.details?.field === 'starts_at'
+      && /posterior/.test(error.publicMessage)
+  );
+});
+
+test('normalizes updateFair dates too', () => {
+  assert.deepEqual(validateWriteProposal('updateFair', {
+    fair_id: 'fair-a', starts_at: '2027-05-01T09:00', site_id: 'site-a',
+  }, { ...context, timezone: 'America/Lima' }), {
+    fair_id: 'fair-a', starts_at: '2027-05-01T14:00:00.000Z',
   });
 });
 

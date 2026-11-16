@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import { Agent as UndiciAgent } from 'undici';
 
 const required = (name, value) => {
   if (!value) throw new Error(`Missing required configuration: ${name}`);
@@ -7,8 +8,6 @@ const required = (name, value) => {
 
 const normalizeKey = (value) => (value.includes('\\n') ? value.replace(/\\n/g, '\n') : value);
 
-// Accepts either inline key material (preferred on hosts without persistent
-// disks, e.g. `<NAME>` env var) or a file path (`<NAME>_PATH`).
 const readKey = (path, name, requiredInProduction = true) => {
   const inline = process.env[name];
   if (inline) return normalizeKey(inline);
@@ -106,6 +105,19 @@ export const config = Object.freeze({
     deleteFairStand: process.env.TOOL_DELETE_FAIR_STAND_METHOD || 'DELETE',
   },
 });
+
+export const httpsDispatcher = (() => {
+  const { mtlsRequired, mtlsCaPath, mtlsCertPath, mtlsKeyPath } = config;
+  if (!mtlsRequired) return undefined;
+  return new UndiciAgent({
+    connect: {
+      ca: fs.readFileSync(mtlsCaPath),
+      cert: fs.readFileSync(mtlsCertPath),
+      key: fs.readFileSync(mtlsKeyPath),
+      rejectUnauthorized: true,
+    },
+  });
+})();
 
 export const assertProductionConfiguration = () => {
   if (config.nodeEnv !== 'production') return;

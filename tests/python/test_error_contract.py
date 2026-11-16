@@ -23,6 +23,19 @@ def test_error_payload_has_stable_shape_and_reference_id():
     }
 
 
+def test_error_payload_exposes_safe_validation_message_and_field():
+    body = error_payload(AgentError(
+        "AI_INVALID_REQUEST",
+        "Invalid date: starts_at",
+        400,
+        public_message="Indica la hora de inicio de la feria.",
+        details={"field": "starts_at"},
+    ), "req-400")
+    assert body["error"]["message"] == "Indica la hora de inicio de la feria."
+    assert body["error"]["details"] == {"field": "starts_at"}
+    assert "Invalid date" not in str(body)
+
+
 def test_catalog_covers_requested_domains():
     assert {"AUTH", "AUTHORIZATION", "VALIDATION", "NETWORK", "AI_PROVIDER", "AI_SERVICE", "DATABASE", "REDIS", "BUSINESS_OPERATION", "INTERNAL"} <= ERROR_CATALOG.keys()
 

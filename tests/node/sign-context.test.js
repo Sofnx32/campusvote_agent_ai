@@ -10,7 +10,7 @@ process.env.AI_CONTEXT_PUBLIC_KEY = publicKey.export({ type: 'spki', format: 'pe
 process.env.AI_CONTEXT_ISSUER = 'issuer';
 process.env.AI_CONTEXT_AUDIENCE = 'audience';
 
-const { signContext, verifyContext } = await import('../../src/node/context.js');
+const { signContext, verifyContext } = await import('../../src/node/utils/context.js');
 
 test('signContext includes the jti claim required by the Python agent', () => {
   const result = signContext(
@@ -32,4 +32,22 @@ test('signContext includes the jti claim required by the Python agent', () => {
   assert.equal(claims.correlation_id, 'corr-1');
   assert.equal(claims.site_id, 'site-1');
   assert.equal(claims.site_name, 'Sede Central');
+});
+
+test('signContext forwards the organization timezone used to normalize fair dates', () => {
+  const withTimezone = signContext(
+    {
+      userId: 'user-1', role: 'ADMIN', scopeLevel: 'SITE',
+      organizationId: 'org-1', siteId: 'site-1', siteName: 'Sede Central', timezone: 'America/Lima',
+    },
+    'corr-tz',
+    new Date(Date.now() + 10000).toISOString()
+  );
+  assert.equal(verifyContext(withTimezone.token, { publicKey, issuer: 'issuer', audience: 'audience' }).timezone, 'America/Lima');
+  const withoutTimezone = signContext(
+    { userId: 'user-1', role: 'ADMIN', scopeLevel: 'SITE', organizationId: 'org-1', siteId: 'site-1' },
+    'corr-no-tz',
+    new Date(Date.now() + 10000).toISOString()
+  );
+  assert.equal(jwt.decode(withoutTimezone.token).timezone, undefined);
 });

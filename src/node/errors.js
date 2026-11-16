@@ -8,6 +8,8 @@ export class AgentError extends Error {
     this.status = status;
     this.retryable = retryable;
     if (options.cause) this.cause = options.cause;
+    if (options.publicMessage) this.publicMessage = options.publicMessage;
+    if (options.details !== undefined && options.details !== null) this.details = options.details;
   }
 }
 
@@ -18,7 +20,7 @@ export const errorResponse = (error, correlationId) => ({
     message: error.publicMessage || error.message || 'Ocurrió un problema inesperado.',
     retryable: Boolean(error.retryable),
     requestId: correlationId,
-    details: null,
+    details: error.details ?? null,
   },
   requestId: correlationId,
   meta: { correlation_id: correlationId },
@@ -36,7 +38,13 @@ export const publicError = (error) => {
     return new AgentError('REDIS_UNAVAILABLE', 'El asistente está temporalmente fuera de servicio.', 503, true);
   }
   if (error instanceof AgentError) {
-    return new AgentError(error.code, PUBLIC_ERROR_MESSAGES[error.code] || 'Ocurrió un problema inesperado.', error.status || 500, error.retryable);
+    return new AgentError(
+      error.code,
+      error.publicMessage || PUBLIC_ERROR_MESSAGES[error.code] || 'Ocurrió un problema inesperado.',
+      error.status || 500,
+      error.retryable,
+      { publicMessage: error.publicMessage, details: error.details }
+    );
   }
   return new AgentError('AI_INTERNAL_ERROR', 'Ocurrió un problema inesperado.', 500);
 };

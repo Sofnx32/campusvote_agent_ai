@@ -18,6 +18,7 @@ from .agent import run_agent_turn
 from .llm import get_provider
 from .models import ChatRequest
 from .observability import request_id_context
+from .presentation import sanitize_assistant_content
 from .tools import execute_tool
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
@@ -164,11 +165,25 @@ async def chat(
         max_tool_calls=settings.max_tool_calls,
         deadline_seconds=settings.agent_deadline_seconds,
     )
-    last_action = results[-1].get("data") if results and isinstance(results[-1], dict) else None
+    last_result = results[-1] if results and isinstance(results[-1], dict) else None
+    last_action = last_result.get("data") if last_result else None
+    last_tool = last_result.get("tool") if last_result else None
+    list_tools = {
+        "getSiteFairs", "getSiteProjects", "getSiteStands", "getSiteResults",
+        "listTeachingCriteria", "listFairStands", "listFairCategories", "listFairCategoryRubrics"
+    }
+    tool_data = last_result.get("data") if last_result and last_tool in list_tools else None
     reply_content = (current.content or "").strip()
     if not reply_content:
         if isinstance(last_action, dict) and last_action.get("status") == "confirmation_required":
             reply_content = "Preparé la propuesta con los datos indicados. Revísala y confirma para aplicarla."
+        elif last_result and last_result.get("success") is False:
+            reason = (last_result.get("error") or {}).get("message")
+            reply_content = (
+                f"No pude completar la operación: {reason}"
+                if isinstance(reason, str) and reason.strip()
+                else "No pude completar la operación con esos datos. Revísalos e inténtalo de nuevo."
+            )
         else:
             raise AgentError("AI_RESPONSE_INVALID", "LLM returned no content", 502)
     if isinstance(last_action, dict) and last_action.get("status") == "confirmation_required" and last_action.get("tool") == "createFair":
@@ -176,7 +191,9 @@ async def chat(
             "Revisa los datos de la feria en la tarjeta. Sube la portada desde aquí; "
             "podrás confirmar cuando esté lista."
         )
-    reply_content = reply_content[:4000]
+    # Última barrera: si el modelo volcó un JSON técnico, la conversación recibe
+    # un resumen conversacional en lugar del payload del backend.
+    reply_content = sanitize_assistant_content(reply_content)[:4000]
     save_turn(payload.conversation_id, context, payload.message, reply_content)
     ui = {"type": "message", "schema": None, "data": None, "actions": []}
     operation = None
@@ -186,9 +203,9 @@ async def chat(
             fields = [
                 {"name": "name", "type": "text", "label": "Nombre", "required": True, "max_length": 200},
                 {"name": "description", "type": "textarea", "label": "Descripción", "required": False, "max_length": 5000},
-                {"name": "starts_at", "type": "date", "label": "Inicio", "required": False},
-                {"name": "ends_at", "type": "date", "label": "Fin", "required": False},
-                {"name": "registration_deadline", "type": "date", "label": "Cierre de inscripción", "required": False},
+                {"name": "starts_at", "type": "datetime", "label": "Inicio (fecha y hora)", "required": False},
+                {"name": "ends_at", "type": "datetime", "label": "Fin (fecha y hora)", "required": False},
+                {"name": "registration_deadline", "type": "datetime", "label": "Cierre de inscripción", "required": False},
                 {"name": "image_url", "type": "image", "label": "Portada", "required": True},
             ]
             title = "Crear feria"
@@ -212,10 +229,11 @@ async def chat(
                 "name": "Nombre", "description": "Descripción", "code": "Código del stand",
                 "min_score": "Puntaje mínimo", "max_score": "Puntaje máximo", "position": "Posición",
                 "points": "Puntos",
-                "status": "Estado", "starts_at": "Inicio", "ends_at": "Fin",
+                "status": "Estado", "starts_at": "Inicio (fecha y hora)", "ends_at": "Fin (fecha y hora)",
+                "registration_deadline": "Cierre de inscripción (fecha y hora)",
             }
             fields = [
-                {"name": key, "type": "number" if key in {"min_score", "max_score", "position"} else "date" if key in {"starts_at", "ends_at"} else "select" if key == "status" else "textarea" if key == "description" else "text",
+                {"name": key, "type": "number" if key in {"min_score", "max_score", "position"} else "datetime" if key in {"starts_at", "ends_at", "registration_deadline"} else "select" if key == "status" else "textarea" if key == "description" else "text",
                  "label": labels.get(key, key.replace("_", " ").capitalize()), "required": False,
                  **({"options": [{"value": status, "label": status} for status in ["DRAFT", "OPEN", "CLOSED"]]} if key == "status" else {}),
                  **({"max_length": 5000} if key == "description" else {})}
@@ -234,12 +252,9 @@ async def chat(
             "status": "awaiting_confirmation",
         }
     elif isinstance(last_action, dict) and last_action.get("status") == "created":
-        ui = {
-            "type": "success",
-            "schema": None,
-            "data": last_action.get("fair"),
-            "actions": [],
-        }
+        # La tarjeta de éxito la construye el agente Node con un view-model
+        # legible; Python nunca reenvía el registro crudo del backend.
+        ui = {"type": "message", "schema": None, "data": None, "actions": []}
         operation = {
             "id": last_action.get("operation_id"),
             "version": last_action.get("version"),
@@ -253,5 +268,5 @@ async def chat(
         "operation": operation,
         "citations": [],
         "suggested_actions": [],
-        "meta": {"correlation_id": payload.correlation_id, "tool_calls": len(results), "truncated": False},
+        "meta": {"correlation_id": payload.correlation_id, "tool_calls": len(results), "truncated": False, "last_tool": last_tool, "tool_data": tool_data},
     }

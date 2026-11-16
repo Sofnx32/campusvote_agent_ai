@@ -4,8 +4,10 @@ import json
 import time
 from collections.abc import Awaitable, Callable
 
-from .errors import AgentError
+from .errors import AgentError, CORRECTABLE_CODES
 from .models import LLMResult
+
+MAX_CORRECTABLE_FAILURES = 2
 
 
 async def run_agent_turn(
@@ -29,6 +31,7 @@ async def run_agent_turn(
     results: list[dict] = []
     messages: list[dict] = [*history, {"role": "user", "content": message}]
     executed = 0
+    correctable_failures = 0
     started = clock()
     while True:
         allow_tools = executed < max_tool_calls
@@ -47,7 +50,23 @@ async def run_agent_turn(
                 call.id = f"call_{executed + offset}"
         messages.append(current.assistant_message())
         for call in calls:
-            result = await execute_tool(call, context, message)
+            try:
+                result = await execute_tool(call, context, message)
+            except AgentError as error:
+                # Un error de validación no debe tumbar el turno: se devuelve al
+                # modelo como resultado de la herramienta para que corrija el
+                # dato o le pida al usuario la información que falta.
+                if error.code not in CORRECTABLE_CODES or correctable_failures >= MAX_CORRECTABLE_FAILURES:
+                    raise
+                correctable_failures += 1
+                result = {
+                    "success": False,
+                    "error": {
+                        "code": error.code,
+                        "message": error.public_message or error.message,
+                        "details": error.details,
+                    },
+                }
             executed += 1
             results.append(result)
             messages.append({
