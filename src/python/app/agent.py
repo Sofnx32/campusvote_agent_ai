@@ -8,6 +8,7 @@ from .errors import AgentError, CORRECTABLE_CODES
 from .models import LLMResult
 
 MAX_CORRECTABLE_FAILURES = 2
+MAX_HISTORY_MESSAGES = 6
 
 
 async def run_agent_turn(
@@ -28,8 +29,10 @@ async def run_agent_turn(
     per call, which is what OpenAI-compatible providers (including Gemini's
     compatibility endpoint) require before the next completion.
     """
+    # Limit history to last N messages to prevent token growth
+    recent_history = history[-MAX_HISTORY_MESSAGES:] if len(history) > MAX_HISTORY_MESSAGES else history
     results: list[dict] = []
-    messages: list[dict] = [*history, {"role": "user", "content": message}]
+    messages: list[dict] = [*recent_history, {"role": "user", "content": message}]
     executed = 0
     correctable_failures = 0
     started = clock()
