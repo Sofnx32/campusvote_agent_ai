@@ -7,6 +7,7 @@ import { AgentError, errorResponse, publicError } from './errors.js';
 import { jsonParserErrorHandler } from './utils/http-middleware.js';
 import { extractBearer, verifyUser, validateActor, signContext, verifyContext } from './utils/context.js';
 import { ReplayStore } from './state/replay-store.js';
+import { AdminSessionStore } from './services/admin-session.js';
 import { BackendAdapter } from './services/backend-adapter.js';
 import { fairActionScopeKey, operationDigest, isExplicitAffirmation, isFairCancellation, isFairConfirmation, isFairResume, preserveUploadedFairImage, validateWriteProposal } from './validators/fair-action.js';
 import { buildOperationResult } from './views/result-view.js';
@@ -30,8 +31,8 @@ app.use((req, res, next) => {
 });
 
 const replay = await ReplayStore.create();
+const adminSessions = await AdminSessionStore.create();
 const backend = new BackendAdapter();
-const userTokens = new Map();
 
 app.use((req, res, next) => {
   const incoming = req.get('X-Correlation-Id') || req.get('X-Request-Id');
@@ -53,8 +54,8 @@ app.use(jsonParserErrorHandler);
 
 // Rutas
 registerHealthRoutes(app);
-registerChatRoutes(app, replay, backend);
-registerToolsRoutes(app, replay, backend, userTokens);
+registerChatRoutes(app, replay, backend, adminSessions);
+registerToolsRoutes(app, replay, backend, adminSessions);
 
 // 404
 app.use((req, res) => {

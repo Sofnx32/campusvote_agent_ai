@@ -8,6 +8,7 @@ export const ERROR_CATALOG = Object.freeze({
   DATABASE: ['DATABASE_UNAVAILABLE', 'DATABASE_OPERATION_FAILED'],
   REDIS: ['REDIS_UNAVAILABLE', 'AI_CONTEXT_REPLAY_STORE_UNAVAILABLE'],
   BUSINESS_OPERATION: ['AI_CONFIRMATION_REQUIRED', 'AI_OPERATION_CONFLICT', 'AI_RESOURCE_NOT_FOUND'],
+  SESSION: ['SESSION_EXPIRED', 'SESSION_REVOKED', 'AI_CONTEXT_EXPIRED'],
   INTERNAL: ['AI_INTERNAL_ERROR'],
 });
 
@@ -41,4 +42,7 @@ export const PUBLIC_ERROR_MESSAGES = Object.freeze({
   AI_TOOL_UNAVAILABLE: 'No se pudo completar la operación en CampusVote. Inténtalo nuevamente.',
   AI_CONTEXT_REPLAY_STORE_UNAVAILABLE: 'El asistente está temporalmente fuera de servicio.',
   REDIS_UNAVAILABLE: 'El asistente está temporalmente fuera de servicio.',
+  SESSION_EXPIRED: 'Tu sesión de administrador ha expirado. Vuelve a iniciar sesión.',
+  SESSION_REVOKED: 'Tu sesión ha sido cerrada. Vuelve a iniciar sesión para continuar.',
+  AI_CONTEXT_EXPIRED: 'El contexto de la operación ha expirado. La operación se reintentará automáticamente.',
 });

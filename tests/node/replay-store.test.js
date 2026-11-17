@@ -48,7 +48,30 @@ test('pending action expires after its confirmation window', async () => {
 });
 
 test('maps Redis outages to a stable retryable REDIS_UNAVAILABLE error', async () => {
-  const store = new ReplayStore({ set: async () => { throw Object.assign(new Error('redis password=hidden'), { code: 'ECONNREFUSED' }); } });
+  const store = new ReplayStore({ set: async () => { throw Object.assign(new Error('redis password=hidden'), { code: 'AI_CONTEXT_REPLAY_STORE_UNAVAILABLE' }); } });
   await assert.rejects(() => store.setIssued('jti-redis', { correlationId: 'corr-redis', deadlineAt: new Date(Date.now() + 10000).toISOString() }),
     (error) => error.code === 'REDIS_UNAVAILABLE' && error.status === 503 && error.retryable === true && !error.message.includes('password'));
+});
+
+test('stores and retrieves admin session ID with issued context', async () => {
+  let currentTime = 1000;
+  const store = new ReplayStore(null, () => currentTime);
+  await store.setIssued('jti-new-1', {
+    correlationId: 'corr-1',
+    deadlineAt: new Date(currentTime + 10000).toISOString(),
+    userId: 'user-1',
+    adminSessionId: 'session-123',
+  });
+  const issued = await store.getIssuedContext('jti-new-1');
+  assert.equal(issued.adminSessionId, 'session-123');
+  assert.equal(issued.correlationId, 'corr-1');
+  assert.equal(issued.userId, 'user-1');
+  assert.equal(issued.status, 'issued');
+  assert.equal(issued.requestOpen, true);
+});
+
+test('getIssuedContext returns null for non-existent JTI', async () => {
+  const store = new ReplayStore();
+  const issued = await store.getIssuedContext('non-existent');
+  assert.equal(issued, null);
 });

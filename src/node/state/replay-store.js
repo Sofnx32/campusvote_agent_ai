@@ -36,13 +36,42 @@ export class ReplayStore {
 
   async setIssued(jti, value) {
     if (this.redis) {
-      const result = await this.redisCall(() => this.redis.set(`ai:context-jti:${jti}`, JSON.stringify({ status: 'issued', request_open: true, correlation_id: value.correlationId, deadline_at: value.deadlineAt, user_id: value.userId }), 'NX', 'EX', config.jtiTtlSeconds));
+      const payload = {
+        status: 'issued',
+        request_open: true,
+        correlation_id: value.correlationId,
+        deadline_at: value.deadlineAt,
+        user_id: value.userId,
+        admin_session_id: value.adminSessionId,
+      };
+      const result = await this.redisCall(() => this.redis.set(`ai:context-jti:${jti}`, JSON.stringify(payload), 'NX', 'EX', config.jtiTtlSeconds));
       if (result !== 'OK') throw new AgentError('AI_CONTEXT_REPLAYED', 'Context jti already exists', 409);
       return;
     }
     purge(jti);
     if (memory.has(jti)) throw new AgentError('AI_CONTEXT_REPLAYED', 'Context jti already exists', 409);
-    memory.set(jti, { status: 'issued', request_open: true, ...value, expiresAt: now() + config.jtiTtlSeconds * 1000 });
+    memory.set(jti, { status: 'issued', request_open: true, ...value, adminSessionId: value.adminSessionId, expiresAt: now() + config.jtiTtlSeconds * 1000 });
+  }
+
+  async getIssuedContext(jti) {
+    let raw;
+    if (this.redis) {
+      raw = await this.redisCall(() => this.redis.get(`ai:context-jti:${jti}`));
+    } else {
+      purge(jti);
+      const entry = memory.get(jti);
+      raw = entry ? JSON.stringify(entry) : null;
+    }
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    return {
+      adminSessionId: parsed.admin_session_id ?? parsed.adminSessionId,
+      correlationId: parsed.correlation_id ?? parsed.correlationId,
+      deadlineAt: parsed.deadline_at ?? parsed.deadlineAt,
+      userId: parsed.user_id ?? parsed.userId,
+      status: parsed.status,
+      requestOpen: parsed.request_open ?? parsed.requestOpen,
+    };
   }
 
   async consume(jti, expected) {

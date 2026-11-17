@@ -3,6 +3,7 @@ import { config } from '../config.js';
 import { AgentError, errorResponse } from '../errors.js';
 import { verifyContext } from '../utils/context.js';
 import { ReplayStore } from '../state/replay-store.js';
+import { AdminSessionStore } from '../services/admin-session.js';
 import { BackendAdapter } from '../services/backend-adapter.js';
 import { fairActionScopeKey, operationDigest, validateWriteProposal, preserveUploadedFairImage } from '../validators/fair-action.js';
 
@@ -26,7 +27,7 @@ const withTimeout = (ms, task) => {
   return Promise.resolve().then(() => task(controller.signal)).finally(() => clearTimeout(timer));
 };
 
-export function registerToolsRoutes(app, replay, backend, userTokens) {
+export function registerToolsRoutes(app, replay, backend, adminSessions) {
   app.post('/internal/ai/v1/tools/:tool', async (req, res) => {
     const correlationId = req.get('X-Correlation-Id') || req.body?.correlation_id;
     try {
@@ -38,8 +39,21 @@ export function registerToolsRoutes(app, replay, backend, userTokens) {
       const siteId = req.body?.input?.site_id;
       if (typeof siteId !== 'string' || siteId !== context.site_id) throw new AgentError('AI_SCOPE_FORBIDDEN', 'Site is not authorized', 403);
       await replay.reserveTool(context.jti, req.body.tool_call_id, config.maxToolCalls);
-      const userToken = userTokens.get(context.jti);
-      if (!userToken) throw new AgentError('AI_CONTEXT_REPLAYED', 'Original authenticated request is no longer active', 409);
+
+      // Retrieve admin session to get the user token
+      const issued = await replay.getIssuedContext(context.jti);
+      if (!issued?.adminSessionId) {
+        throw new AgentError('AI_CONTEXT_REPLAYED', 'Original admin session not found', 409);
+      }
+      const adminSession = await adminSessions.getSession(issued.adminSessionId);
+      if (!adminSession || adminSession.status !== 'active') {
+        throw new AgentError(adminSession?.status === 'revoked' ? 'SESSION_REVOKED' : 'SESSION_EXPIRED', 'Admin session is no longer active', 401);
+      }
+      // Validate session matches context
+      if (adminSession.organizationId !== context.organization_id || adminSession.siteId !== context.site_id) {
+        throw new AgentError('AI_SCOPE_MISMATCH', 'Admin session does not match AI context scope', 403);
+      }
+      const userToken = adminSession.userToken;
       const input = { ...(req.body?.input ?? {}), site_id: siteId };
 
       if (writeTools.has(req.params.tool)) {

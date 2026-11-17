@@ -48,6 +48,9 @@ export const config = Object.freeze({
   maxToolBytes: Number(process.env.AI_TOOL_AGGREGATE_MAX_BYTES || 524288),
   redisUrl: process.env.REDIS_URL || '',
   allowInMemoryReplay: process.env.ALLOW_IN_MEMORY_REPLAY === 'true',
+  // Admin session settings
+  adminSessionTtlSeconds: Number(process.env.AI_ADMIN_SESSION_TTL_SECONDS || 28800), // 8 hours
+  adminSessionIdleTtlSeconds: Number(process.env.AI_ADMIN_SESSION_IDLE_TTL_SECONDS || 7200), // 2 hours
   backendUrl: process.env.CAMPUSVOTE_BACKEND_URL || '',
   backendAuthMode: process.env.CAMPUSVOTE_AUTH_MODE || 'user_jwt',
   requireScopedToolEnvelope: process.env.CAMPUSVOTE_TOOL_RESPONSE_ENVELOPE_REQUIRED !== 'false',

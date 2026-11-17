@@ -4,6 +4,7 @@ import { AgentError, errorResponse, publicError } from '../errors.js';
 import { readJsonResponse } from '../utils/http-response.js';
 import { extractBearer, verifyUser, validateActor, signContext, verifyContext } from '../utils/context.js';
 import { ReplayStore } from '../state/replay-store.js';
+import { AdminSessionStore } from '../services/admin-session.js';
 import { BackendAdapter } from '../services/backend-adapter.js';
 import { fairActionScopeKey, operationDigest, isExplicitAffirmation, isFairCancellation, isFairConfirmation, isFairResume, preserveUploadedFairImage, validateWriteProposal } from '../validators/fair-action.js';
 import { buildOperationResult, buildFairListView } from '../views/result-view.js';
@@ -69,10 +70,66 @@ const requireServiceToken = (req) => {
   if (req.get('authorization') !== `Bearer ${config.serviceToken}`) throw new AgentError('AI_SERVICE_UNAUTHORIZED', 'Invalid service token', 401);
 };
 
-export function registerChatRoutes(app, replay, backend) {
+async function getOrCreateAdminSession(adminSessions, userToken, userClaims, actor, correlationId) {
+  const tokenUserId = userClaims.userId ?? userClaims.sub;
+  let session = await adminSessions.getSessionByUserId(tokenUserId);
+
+  if (session) {
+    // Validate session matches current context
+    if (session.userId !== actor.userId ||
+        session.organizationId !== actor.organizationId ||
+        session.siteId !== actor.siteId) {
+      // Context mismatch - revoke old session and create new one
+      await adminSessions.revokeSession(session.sessionId);
+      session = null;
+    }
+  }
+
+  if (!session) {
+    // Create new admin session
+    session = await adminSessions.createSession(
+      actor.userId,
+      actor.organizationId,
+      actor.siteId,
+      actor.siteName,
+      actor.timezone,
+      userToken,
+      correlationId
+    );
+  } else {
+    // Update last activity
+    await adminSessions.updateActivity(session.sessionId);
+  }
+
+  // Validate session status
+  if (session.status !== 'active') {
+    if (session.status === 'revoked') {
+      throw new AgentError('SESSION_REVOKED', 'Admin session has been revoked', 401);
+    }
+    throw new AgentError('SESSION_EXPIRED', 'Admin session has expired', 401);
+  }
+
+  // Check if CampusVote user token is still valid by resolving actor context
+  // This ensures the user's CampusVote session hasn't expired
+  try {
+    await withTimeout(config.toolTimeoutMs, async (signal) => backend.resolveActorContext(session.userToken, signal, correlationId));
+  } catch (error) {
+    if (error.code === 'AI_SERVICE_UNAUTHORIZED') {
+      // User's CampusVote session expired
+      await adminSessions.revokeSession(session.sessionId);
+      throw new AgentError('SESSION_EXPIRED', 'User session has expired', 401);
+    }
+    // Other errors (network, etc.) - allow session to continue, will fail on actual operations
+  }
+
+  return session;
+}
+
+export function registerChatRoutes(app, replay, backend, adminSessions) {
   app.post('/v1/chat', async (req, res) => {
     const correlationId = req.requestId;
     const conversationId = req.body?.conversation_id || crypto.randomUUID();
+    let session = null;
     try {
       const userToken = extractBearer(req.get('authorization'));
       const userClaims = verifyUser(userToken);
@@ -83,6 +140,10 @@ export function registerChatRoutes(app, replay, backend) {
       const actor = validateActor(resolvedActor);
       const tokenUserId = userClaims.userId ?? userClaims.sub;
       if (!tokenUserId || tokenUserId !== actor.userId) throw new AgentError('AI_CONTEXT_INVALID', 'User token does not match the resolved administrator', 401);
+
+      // Get or create admin session
+      session = await getOrCreateAdminSession(adminSessions, userToken, userClaims, actor, correlationId);
+
       const conversationScope = fairActionScopeKey({ sub: actor.userId, organization_id: actor.organizationId, site_id: actor.siteId, conversation_id: conversationId });
       const pendingAction = await replay.getPendingAction(conversationScope);
 
@@ -170,14 +231,15 @@ export function registerChatRoutes(app, replay, backend) {
         if (!await replay.consumePendingAction(conversationScope, pendingAction.digest)) {
           throw new AgentError('AI_CONFIRMATION_REQUIRED', 'La confirmación ya se usó o venció', 409);
         }
+        // Re-verify active assignment before executing
         await withTimeout(config.toolTimeoutMs, async (signal) => backend.assertActiveAssignment(
           { sub: actor.userId, organization_id: actor.organizationId, site_id: actor.siteId, correlation_id: correlationId },
-          actor.siteId, userToken, signal
+          actor.siteId, session.userToken, signal
         ));
         const result = await withTimeout(config.toolTimeoutMs, async (signal) => backend.callTool(
           pendingAction.tool, { ...pendingAction.proposal, site_id: actor.siteId },
           { sub: actor.userId, organization_id: actor.organizationId, site_id: actor.siteId },
-          userToken, signal
+          session.userToken, signal
         ));
         const view = buildOperationResult({
           tool: pendingAction.tool, data: result, proposal: pendingAction.proposal, operationId: pendingAction.operationId,
@@ -191,10 +253,8 @@ export function registerChatRoutes(app, replay, backend) {
       }
       const deadlineAt = new Date(Date.now() + config.chatTimeoutMs).toISOString();
       const context = signContext(actor, correlationId, deadlineAt);
-      await replay.setIssued(context.jti, { correlationId, deadlineAt, userId: actor.userId });
+      await replay.setIssued(context.jti, { correlationId, deadlineAt, userId: actor.userId, adminSessionId: session.sessionId });
       await replay.consume(context.jti, { correlationId });
-      const userTokens = new Map();
-      userTokens.set(context.jti, userToken);
       try {
         const response = await withTimeout(config.chatTimeoutMs, async (signal) => {
           const upstream = await fetch(new URL('/v1/chat', config.pythonUrl), {
@@ -226,15 +286,46 @@ export function registerChatRoutes(app, replay, backend) {
         return res.json(response);
       } finally {
         await replay.closeRequest(context.jti);
-        userTokens.delete(context.jti);
       }
     } catch (error) {
+      // If session was revoked/expired during request, ensure cleanup
+      if (session?.sessionId && (error.code === 'SESSION_REVOKED' || error.code === 'SESSION_EXPIRED')) {
+        await adminSessions.revokeSession(session.sessionId);
+      }
       const normalized = publicError(error);
       console.error(JSON.stringify({
         event: 'request_failed', service: 'agent-node', requestId: correlationId,
         method: req?.method, route: req?.route?.path || req?.path,
         status: normalized.status, code: normalized.code,
         cause: error?.name || 'Error', durationMs: req.startedAt ? Date.now() - req.startedAt : undefined,
+      }));
+      if (!res.headersSent) res.status(normalized.status).json(errorResponse(normalized, correlationId));
+    }
+  });
+
+  // Logout endpoint - revokes admin session
+  app.post('/v1/auth/logout', async (req, res) => {
+    const correlationId = req.requestId;
+    try {
+      const userToken = extractBearer(req.get('authorization'));
+      const userClaims = verifyUser(userToken);
+      const tokenUserId = userClaims.userId ?? userClaims.sub;
+      if (!tokenUserId) {
+        throw new AgentError('AI_CONTEXT_INVALID', 'User token does not contain user ID', 401);
+      }
+      const revoked = await adminSessions.revokeSessionByUserId(tokenUserId);
+      return res.json({
+        success: true,
+        revoked,
+        message: revoked ? 'Sesión cerrada correctamente' : 'No había sesión activa',
+        requestId: correlationId,
+      });
+    } catch (error) {
+      const normalized = publicError(error);
+      console.error(JSON.stringify({
+        event: 'logout_failed', service: 'agent-node', requestId: correlationId,
+        status: normalized.status, code: normalized.code,
+        cause: error?.name || 'Error',
       }));
       if (!res.headersSent) res.status(normalized.status).json(errorResponse(normalized, correlationId));
     }

@@ -10,7 +10,7 @@
     "start": "node --env-file-if-exists=.env src/node/server.js",
     "test": "node --test",
     "test:e2e": "node tests/e2e/runner.js",
-    "lint": "node --check src/node/server.js && node --check src/node/config.js && node --check src/node/context.js && node --check src/node/errors.js && node --check src/node/replay-store.js && node --check src/node/backend-adapter.js"
+    "lint": "node --check src/node/server.js && node --check src/node/config.js && node --check src/node/utils/context.js && node --check src/node/errors.js && node --check src/node/state/replay-store.js && node --check src/node/services/backend-adapter.js && node --check src/node/services/admin-session.js && node --check src/node/routes/chat.js && node --check src/node/routes/tools.js"
   },
   "dependencies": {
     "express": "^5.1.0",
