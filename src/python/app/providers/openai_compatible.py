@@ -143,13 +143,12 @@ class OpenAICompatibleProvider(LLMProvider):
                     raise AgentError("LLM_INVALID_RESPONSE", "LLM provider returned an invalid response", 502)
                 function = raw.get("function") or {}
                 name = function.get("name")
-                if not isinstance(name, str) or not name.strip():
-                    raise AgentError("LLM_INVALID_RESPONSE", "LLM provider returned an invalid response", 502)
-                if name not in TOOLS:
+                if not isinstance(name, str) or name not in TOOLS:
                     logger.warning(
                         "LLM requested unknown tool requestId=%s tool=%s",
                         request_id_context.get(), name,
                     )
+                    raise AgentError("AI_TOOL_NOT_FOUND", "LLM requested an unknown tool", 502)
                 arguments = function.get("arguments")
                 if isinstance(arguments, str):
                     try:

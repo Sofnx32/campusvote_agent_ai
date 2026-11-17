@@ -206,15 +206,15 @@ def test_invalid_provider_responses_are_classified(monkeypatch, payload):
     assert error.value.code == "LLM_INVALID_RESPONSE"
 
 
-def test_unknown_tool_names_are_returned_to_the_model(monkeypatch):
-    OpenAICompatibleProvider, _ = setup_provider(monkeypatch, MockResponse(payload=tool_call_payload([
+def test_unknown_tool_names_are_rejected(monkeypatch):
+    OpenAICompatibleProvider, AgentError = setup_provider(monkeypatch, MockResponse(payload=tool_call_payload([
         ("call-1", "dropDatabase", {}),
     ])))
 
-    result = run(OpenAICompatibleProvider().complete({"site_id": "site-a"}, [{"role": "user", "content": "x"}]))
+    with pytest.raises(AgentError) as error:
+        run(OpenAICompatibleProvider().complete({"site_id": "site-a"}, [{"role": "user", "content": "x"}]))
 
-    assert result.tool_calls[0].name == "dropDatabase"
-    assert result.tool_calls[0].id == "call-1"
+    assert error.value.code == "AI_TOOL_NOT_FOUND"
 
 
 def test_missing_configuration_has_specific_error(monkeypatch):

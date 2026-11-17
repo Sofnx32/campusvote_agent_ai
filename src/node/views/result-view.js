@@ -157,70 +157,71 @@ const LIST_TOOL_LABELS = {
   listFairCategoryRubrics: { singular: 'rúbrica', plural: 'rúbricas' },
 };
 
-const listLine = (tool, item) => {
-  if (!item || typeof item !== 'object') return null;
-  const name = text(item.name, 120) || text(item.code, 120) || text(item.title, 120);
-  if (!name) return null;
-  const bits = [name];
-  if (tool === 'getSiteFairs' && item.status) bits.push(FAIR_STATUS[item.status]?.label ?? String(item.status));
-  if (tool === 'listTeachingCriteria' && typeof item.is_active === 'boolean') bits.push(item.is_active ? 'activo' : 'inactivo');
-  const fairName = text(item.fair_name, 120);
-  if (fairName) bits.push(fairName);
-  if (Number.isFinite(item.project_count)) bits.push(`${item.project_count} proyectos`);
-  if (Number.isFinite(item.points)) bits.push(`${item.points} puntos`);
-  return bits.join(' · ');
+const listItemFields = (tool, item) => {
+  const base = [];
+  if (tool === 'getSiteFairs' || tool === 'listFairCategories' || tool === 'listFairCategoryRubrics') {
+    base.push({ name: 'name', type: 'text', label: 'Nombre', required: false });
+    base.push({ name: 'description', type: 'textarea', label: 'Descripción', required: false });
+  }
+  if (tool === 'getSiteFairs') {
+    base.push({ name: 'status', type: 'text', label: 'Estado', required: false });
+    base.push({ name: 'starts_at', type: 'datetime', label: 'Inicio', required: false });
+    base.push({ name: 'ends_at', type: 'datetime', label: 'Fin', required: false });
+    base.push({ name: 'project_count', type: 'number', label: 'Proyectos', required: false });
+  }
+  if (tool === 'getSiteProjects') {
+    base.push({ name: 'code', type: 'text', label: 'Código', required: false });
+    base.push({ name: 'description', type: 'textarea', label: 'Descripción', required: false });
+    base.push({ name: 'fair_name', type: 'text', label: 'Feria', required: false });
+  }
+  if (tool === 'getSiteStands' || tool === 'listFairStands') {
+    base.push({ name: 'code', type: 'text', label: 'Código', required: false });
+    base.push({ name: 'description', type: 'textarea', label: 'Descripción', required: false });
+    base.push({ name: 'fair_name', type: 'text', label: 'Feria', required: false });
+  }
+  if (tool === 'listTeachingCriteria') {
+    base.push({ name: 'name', type: 'text', label: 'Nombre', required: false });
+    base.push({ name: 'description', type: 'textarea', label: 'Descripción', required: false });
+    base.push({ name: 'points', type: 'number', label: 'Puntos', required: false });
+    base.push({ name: 'is_active', type: 'text', label: 'Estado', required: false });
+  }
+  return base;
+};
+
+const formatListItem = (tool, item) => {
+  const formatted = { ...item };
+  if (tool === 'getSiteFairs' && item.status) {
+    formatted.status = FAIR_STATUS[item.status]?.label ?? item.status;
+  }
+  if (tool === 'listTeachingCriteria' && typeof item.is_active === 'boolean') {
+    formatted.is_active = item.is_active ? 'Activo' : 'Inactivo';
+  }
+  return formatted;
 };
 
 export const buildFairListView = ({ fairs = [], tool, totalCount = 0 } = {}) => {
   const labels = LIST_TOOL_LABELS[tool] || { singular: 'elemento', plural: 'elementos' };
-  const rows = Array.isArray(fairs) ? fairs : [];
-  const lines = rows.map((item) => listLine(tool, item)).filter(Boolean);
-  const count = Number.isFinite(totalCount) ? totalCount : lines.length;
-  const shown = lines.slice(0, 12);
-  const noun = count === 1 ? labels.singular : labels.plural;
-  const message = shown.length === 0
-    ? `No encontré ${labels.plural}.`
-    : [
-      `Se encontraron ${count} ${noun}${count > shown.length ? ` (mostrando ${shown.length})` : ''}.`,
-      ...shown.map((line, index) => `${index + 1}. ${line}`),
-    ].join('\n');
+  const count = Number.isFinite(totalCount) ? totalCount : fairs.length;
+  const hasItems = fairs.length > 0;
+  const message = hasItems
+    ? `Se encontraron ${count} ${count === 1 ? labels.singular : labels.plural}.`
+    : `No hay ${labels.plural} registradas.`;
+
+  const fields = hasItems ? listItemFields(tool, fairs[0]) : [];
+  const data = hasItems ? fairs.map((item) => formatListItem(tool, item)) : [];
 
   return {
     message,
-    ui: { type: 'message', schema: null, data: null, actions: [] },
+    ui: {
+      type: 'list',
+      schema: { title: `Lista de ${labels.plural}`, fields },
+      data,
+      links: [],
+      suggestions: hasItems ? [{ label: `Ver ${labels.singular}`, message: `Quiero ver los detalles de la primera ${labels.singular}.` }] : [],
+      technical: { tool: tool ?? 'unknown', returned_count: fairs.length, total_count: count },
+      actions: [],
+    },
   };
-};
-
-const PANEL_TYPES = new Set(['message', 'form', 'selection', 'summary', 'confirmation', 'success', 'error']);
-const PANEL_FIELD_TYPES = new Set(['text', 'textarea', 'date', 'number', 'select', 'multiselect', 'image']);
-const PANEL_ACTIONS = new Set(['confirm', 'edit', 'cancel', 'submit', 'retry']);
-const FIELD_NAME = /^[a-z][a-z0-9_]*$/;
-
-const panelField = (field) => {
-  if (!field || typeof field !== 'object' || !FIELD_NAME.test(field.name || '')) return null;
-  const type = field.type === 'datetime' ? 'text' : field.type;
-  if (!PANEL_FIELD_TYPES.has(type)) return null;
-  const safe = { name: field.name, type, label: String(field.label || field.name).slice(0, 100), required: Boolean(field.required) };
-  if (Number.isInteger(field.max_length) && field.max_length > 0 && field.max_length <= 5000) safe.max_length = field.max_length;
-  if (type === 'select' || type === 'multiselect') {
-    const options = Array.isArray(field.options)
-      ? field.options.filter((option) => option && typeof option.value === 'string' && typeof option.label === 'string' && option.label.length <= 100).slice(0, 100)
-      : [];
-    if (options.length > 0) safe.options = options.map((option) => ({ value: option.value, label: option.label }));
-  }
-  return safe;
-};
-
-export const panelUi = (ui) => {
-  const empty = { type: 'message', schema: null, data: null, actions: [] };
-  if (!ui || typeof ui !== 'object' || Array.isArray(ui)) return empty;
-  const type = PANEL_TYPES.has(ui.type) ? ui.type : 'message';
-  const fields = Array.isArray(ui.schema?.fields) ? ui.schema.fields.map(panelField).filter(Boolean).slice(0, 30) : [];
-  const title = typeof ui.schema?.title === 'string' && ui.schema.title.trim() ? ui.schema.title.trim().slice(0, 120) : null;
-  const schema = title || fields.length > 0 ? { ...(title ? { title } : {}), ...(fields.length > 0 ? { fields } : {}) } : null;
-  const data = ui.data && typeof ui.data === 'object' && !Array.isArray(ui.data) ? ui.data : null;
-  const actions = Array.isArray(ui.actions) ? ui.actions.filter((action) => PANEL_ACTIONS.has(action)).slice(0, 8) : [];
-  return { type, schema, data, actions };
 };
 
 export const buildOperationResult = ({ tool, data, proposal = {}, operationId } = {}) => {

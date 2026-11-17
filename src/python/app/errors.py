@@ -56,8 +56,6 @@ PUBLIC_MESSAGES = {
     "LLM_PROVIDER_UNAVAILABLE": "El asistente está temporalmente fuera de servicio.",
     "LLM_INVALID_RESPONSE": "El asistente no pudo procesar una respuesta válida. Inténtalo nuevamente.",
     "AI_INTERNAL_ERROR": "Ocurrió un problema inesperado.",
-    "AI_TOOL_NOT_FOUND": "Esa acción no está disponible en el asistente.",
-    "AI_RESPONSE_INVALID": "El asistente no pudo procesar una respuesta válida. Inténtalo nuevamente.",
 }
 
 
