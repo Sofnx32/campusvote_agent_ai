@@ -24,7 +24,21 @@ WRITE_TOOLS = {
 }
 
 
-async def execute_tool(tool_call: ToolCall, context: dict, user_message: str = "") -> dict:
+async def execute_tool(
+    tool_call: ToolCall,
+    context: dict,
+    user_message: str = "",
+    remaining_seconds: float | None = None,
+) -> dict:
+    """Ejecuta la herramienta acotando la espera al presupuesto global restante.
+
+    Limitación: el timeout acota la espera HTTP de Python hacia Node. El trabajo
+    que Node realice después de recibir la petición (incluida la confirmación de
+    escrituras) queda fuera del control de este proceso; no se afirma garantía
+    sobre esa etapa.
+    """
+    if remaining_seconds is not None and remaining_seconds <= 0:
+        raise AgentError("AI_DEADLINE_EXCEEDED", "Request deadline exceeded", 504, True)
     if tool_call.name not in {
         "getSiteOverview",
         "getSiteFairs",
@@ -71,7 +85,10 @@ async def execute_tool(tool_call: ToolCall, context: dict, user_message: str = "
         "conversation_id": context.get("conversation_id"),
     }
     try:
-        client_kwargs = {"timeout": settings.tool_timeout_seconds}
+        timeout = settings.tool_timeout_seconds
+        if remaining_seconds is not None:
+            timeout = min(timeout, remaining_seconds)
+        client_kwargs = {"timeout": timeout}
         if settings.mtls_required:
             client_kwargs["cert"] = (settings.mtls_cert_path, settings.mtls_key_path)
             client_kwargs["verify"] = settings.mtls_ca_path

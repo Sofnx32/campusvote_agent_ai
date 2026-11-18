@@ -23,7 +23,14 @@ export class ActorResolver {
       const code = payload?.error?.code;
       const message = payload?.error?.message;
       if (response.status === 401) {
-        throw new AgentError('AI_SERVICE_UNAUTHORIZED', 'User session is no longer valid', 401);
+        const reason = code || 'UNKNOWN';
+        console.warn(JSON.stringify({
+          event: 'campusvote_auth_failed', service: 'agent-node', requestId: correlationId,
+          reason, status: 401,
+        }));
+        const err = new AgentError('AI_SERVICE_UNAUTHORIZED', 'User session is no longer valid', 401);
+        err.details = { reason };
+        throw err;
       }
       if (response.status === 403) {
         if (code === 'AI_ORGANIZATION_REQUIRED' || code === 'AI_SITE_ASSIGNMENT_REQUIRED') {

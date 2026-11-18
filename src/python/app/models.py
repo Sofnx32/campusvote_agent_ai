@@ -20,6 +20,10 @@ class ToolCall(BaseModel):
 class LLMResult(BaseModel):
     content: str | None = None
     tool_calls: list[ToolCall] = Field(default_factory=list)
+    # Telemetría de Fase 1: el proveedor la rellena y el orquestador la agrega.
+    usage: dict = Field(default_factory=dict)
+    latency_ms: float = 0.0
+    truncated: bool = False
 
     def assistant_message(self) -> dict:
         """Build the assistant message that must precede tool results."""

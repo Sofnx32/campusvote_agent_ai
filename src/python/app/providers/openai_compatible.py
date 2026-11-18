@@ -1,173 +1,222 @@
+"""Proveedor OpenAI-compatible: orquestación de intentos y fallback.
+
+La lógica se divide en módulos de responsabilidad única:
+  - output_tokens: parámetro de límite de salida.
+  - retry_policy: estados transitorios, backoff y presupuesto.
+  - http_transport: una llamada HTTP sin reintentos.
+  - response_parser: parseo de choices, tools y finish_reason.
+  - telemetry: logs JSON correlacionados y sanitizados.
+"""
+
 from __future__ import annotations
 
-import json
-import logging
 import time
-import uuid
-
-import httpx
 
 from ..config import settings
 from ..errors import AgentError
-from ..models import LLMResult, ToolCall
-from ..observability import request_id_context
+from ..models import LLMResult
+from ..observability import current_metrics, request_id_context
 from ..prompts import system_prompt
-from ..tool_schemas import tool_schema
 from .base import LLMProvider
-
-logger = logging.getLogger(__name__)
-
-TOOLS = [
-    "getSiteOverview", "getSiteFairs", "getSiteProjects", "getSiteStands", "getSiteResults",
-    "listTeachingCriteria", "createTeachingCriterion", "updateTeachingCriterion",
-    "toggleTeachingCriterion", "deleteTeachingCriterion",
-    "listFairCategories", "listFairCategoryRubrics",
-    "createFairRubric", "addFairRubricCriterion",
-    "createCategoryFairRubric", "addCategoryFairRubricCriterion",
-    "createFair", "updateFair", "changeFairStatus",
-    "listFairStands", "createFairStand", "updateFairStand", "deleteFairStand",
-]
-
-READ_TOOLS = {
-    "getSiteOverview", "getSiteFairs", "getSiteProjects", "getSiteStands", "getSiteResults",
-    "listFairStands", "listFairCategories", "listFairCategoryRubrics", "listTeachingCriteria",
-}
-WRITE_TOOLS = set(TOOLS) - READ_TOOLS
-
-FALLBACK_ERROR_CODES = frozenset({
-    "LLM_AUTH_FAILED", "LLM_MODEL_NOT_FOUND", "LLM_RATE_LIMITED",
-    "LLM_PROVIDER_TIMEOUT", "LLM_PROVIDER_UNAVAILABLE",
-})
+from .http_transport import send_once
+from .output_tokens import output_token_param as resolve_output_token_param
+from .retry_policy import (
+    FALLBACK_ERROR_CODES,
+    calculate_backoff,
+    is_retryable,
+    sleep_with_budget_check,
+    total_attempts,
+)
+from .telemetry import emit_attempt_log, emit_event
+from .tool_selector import select_tool_names
+from .tool_registry import READ_TOOLS, TOOLS, WRITE_TOOLS  # noqa: F401 (API pública)
+from ..tool_schemas import tool_schema  # noqa: F401 (API pública)
 
 
 def fallback_endpoint() -> tuple[str, str, str] | None:
     url = (getattr(settings, "llm_fallback_url", "") or "").strip()
     model = (getattr(settings, "llm_fallback_model", "") or "").strip()
     api_key = (getattr(settings, "llm_fallback_api_key", "") or "").strip()
-    if url and model and api_key:
-        return url, model, api_key
-    return None
+    return (url, model, api_key) if url and model and api_key else None
 
 
 class OpenAICompatibleProvider(LLMProvider):
     async def complete(self, context: dict, messages: list[dict], allow_tools: bool = True) -> LLMResult:
         if not settings.llm_provider or not settings.llm_url or not settings.llm_model or not settings.llm_api_key:
             raise AgentError("LLM_CONFIG_MISSING", "LLM provider configuration is incomplete", 503)
+
+        param = resolve_output_token_param(settings.llm_output_token_param, settings.llm_model)
         payload: dict = {
             "model": settings.llm_model,
             "messages": [{"role": "system", "content": system_prompt(context)}, *messages],
         }
         if allow_tools:
-            payload["tools"] = [
-                {"type": "function", "function": tool_schema(name)} for name in TOOLS
-            ]
-            payload["tool_choice"] = "auto"
+            tool_names = select_tool_names(context, messages, allow_tools)
+            if tool_names:
+                payload["tools"] = [
+                    {"type": "function", "function": tool_schema(name)} for name in tool_names
+                ]
+                payload["tool_choice"] = "auto"
+        if settings.llm_max_output_tokens > 0:
+            payload[param] = settings.llm_max_output_tokens
+
+        if settings.llm_total_budget_seconds <= settings.llm_fallback_budget_seconds:
+            emit_event(
+                "warning", "llm_budget_invalid",
+                total_budget_seconds=settings.llm_total_budget_seconds,
+                fallback_budget_seconds=settings.llm_fallback_budget_seconds,
+            )
+
         budget_ends = time.monotonic() + settings.llm_total_budget_seconds
         try:
-            return await self._send(
+            return await self._attempts(
                 settings.llm_url, settings.llm_model, settings.llm_api_key, payload,
                 timeout=min(settings.llm_timeout_seconds, settings.llm_total_budget_seconds),
+                budget_ends=budget_ends, is_fallback=False, token_param=param,
             )
         except AgentError as error:
-            fallback = fallback_endpoint()
-            if fallback is None or error.code not in FALLBACK_ERROR_CODES:
-                raise
-            remaining = budget_ends - time.monotonic()
-            if remaining < 1:
-                raise
-            url, model, api_key = fallback
-            logger.warning(
-                "llm_fallback_engaged requestId=%s primary_model=%s fallback_model=%s cause=%s",
-                request_id_context.get(), settings.llm_model, model, error.code,
-            )
-            return await self._send(
-                url, model, api_key, {**payload, "model": model},
-                timeout=min(settings.llm_timeout_seconds, remaining),
-            )
+            return await self._with_fallback(error, payload, param, budget_ends)
 
-    async def _send(self, url: str, model: str, api_key: str, payload: dict, timeout: float | None = None) -> LLMResult:
-        try:
-            async with httpx.AsyncClient(timeout=timeout or settings.llm_timeout_seconds) as client:
-                response = await client.post(
-                    url,
-                    json=payload,
-                    headers={"Authorization": "Bearer " + api_key},
-                )
-                if response.status_code >= 400:
-                    status = response.status_code
-                    if status in (401, 403):
-                        code, public_status = "LLM_AUTH_FAILED", 502
-                    elif status == 404:
-                        code, public_status = "LLM_MODEL_NOT_FOUND", 502
-                    elif status == 429:
-                        code, public_status = "LLM_RATE_LIMITED", 429
-                    else:
-                        code, public_status = "LLM_PROVIDER_UNAVAILABLE", 503
-                    logger.warning(
-                        "LLM request failed requestId=%s provider=%s model=%s status=%s cause=http_status",
-                        request_id_context.get(), settings.llm_provider, model, status,
-                    )
-                    raise AgentError(code, "LLM provider request failed", public_status, status == 429 or status >= 500)
-                body = response.json()
-                choice = body["choices"][0]["message"]
-                if not isinstance(choice, dict):
-                    raise ValueError("message must be an object")
-        except httpx.TimeoutException as error:
-            logger.warning("LLM request failed requestId=%s provider=%s model=%s cause=timeout", request_id_context.get(), settings.llm_provider, model)
-            raise AgentError("LLM_PROVIDER_TIMEOUT", "LLM provider timed out", 504, True) from error
-        except AgentError:
-            raise
-        except httpx.RequestError as error:
-            logger.warning(
-                "LLM request failed requestId=%s provider=%s model=%s cause=%s",
-                request_id_context.get(), settings.llm_provider, model, type(error).__name__,
+    async def _with_fallback(
+        self,
+        error: AgentError,
+        payload: dict,
+        token_param: str,
+        primary_budget_ends: float,
+    ) -> LLMResult:
+        fallback = fallback_endpoint()
+        if fallback is None:
+            emit_event(
+                "warning", "llm_fallback_not_configured",
+                primary_model=settings.llm_model, cause=error.code,
+                output_token_param=token_param,
             )
-            raise AgentError("LLM_PROVIDER_UNAVAILABLE", "LLM provider is unavailable", 503, True) from error
-        except (KeyError, IndexError, TypeError, ValueError, json.JSONDecodeError) as error:
-            logger.warning(
-                "LLM response invalid requestId=%s provider=%s model=%s cause=%s",
-                request_id_context.get(), settings.llm_provider, model, type(error).__name__,
-            )
-            raise AgentError("LLM_INVALID_RESPONSE", "LLM provider returned an invalid response", 502) from error
+            raise error
+        if error.code not in FALLBACK_ERROR_CODES:
+            emit_event("warning", "llm_fallback_not_applicable", primary_model=settings.llm_model, cause=error.code)
+            raise error
 
-        content = choice.get("content")
-        if not isinstance(content, str):
-            content = ""
-        raw_calls = choice.get("tool_calls") or []
-        if not isinstance(raw_calls, list):
-            raise AgentError("LLM_INVALID_RESPONSE", "LLM provider returned an invalid response", 502)
-        tool_calls: list[ToolCall] = []
-        if payload.get("tools"):
-            for raw in raw_calls:
-                if not isinstance(raw, dict):
-                    raise AgentError("LLM_INVALID_RESPONSE", "LLM provider returned an invalid response", 502)
-                function = raw.get("function") or {}
-                name = function.get("name")
-                if not isinstance(name, str) or name not in TOOLS:
-                    logger.warning(
-                        "LLM requested unknown tool requestId=%s tool=%s",
-                        request_id_context.get(), name,
-                    )
-                    raise AgentError("AI_TOOL_NOT_FOUND", "LLM requested an unknown tool", 502)
-                arguments = function.get("arguments")
-                if isinstance(arguments, str):
-                    try:
-                        arguments = json.loads(arguments) if arguments.strip() else {}
-                    except json.JSONDecodeError as error:
-                        raise AgentError("AI_RESPONSE_INVALID", "LLM returned invalid tool arguments", 502) from error
-                if arguments is None:
-                    arguments = {}
-                if not isinstance(arguments, dict):
-                    raise AgentError("AI_RESPONSE_INVALID", "LLM returned invalid tool arguments", 502)
-                tool_calls.append(
-                    ToolCall(
-                        id=str(raw.get("id") or f"call_{uuid.uuid4().hex}"),
-                        name=name,
-                        arguments=arguments,
-                    )
+        metrics = current_metrics()
+        if metrics:
+            metrics.fallbacks += 1
+        remaining = primary_budget_ends - time.monotonic()
+        reserve = settings.llm_fallback_budget_seconds + settings.llm_retry_min_next_attempt_seconds
+        if remaining < reserve:
+            emit_event(
+                "warning", "llm_fallback_skipped_insufficient_budget",
+                primary_model=settings.llm_model,
+                remaining_seconds=round(remaining, 2),
+                fallback_budget_seconds=settings.llm_fallback_budget_seconds,
+            )
+            raise error
+
+        url, model, api_key = fallback
+        emit_event(
+            "warning", "llm_fallback_engaged",
+            primary_model=settings.llm_model, fallback_model=model, cause=error.code,
+            remaining_seconds=round(remaining, 2),
+            fallback_budget_seconds=settings.llm_fallback_budget_seconds,
+        )
+        return await self._attempts(
+            url, model, api_key, {**payload, "model": model},
+            timeout=min(settings.llm_timeout_seconds, settings.llm_fallback_budget_seconds),
+            budget_ends=time.monotonic() + settings.llm_fallback_budget_seconds,
+            is_fallback=True, token_param=token_param,
+        )
+
+    async def _attempts(
+        self,
+        url: str,
+        model: str,
+        api_key: str,
+        payload: dict,
+        *,
+        timeout: float,
+        budget_ends: float,
+        is_fallback: bool,
+        token_param: str,
+    ) -> LLMResult:
+        """Reintentos acotados al cliente Python; nunca re-ejecuta tools."""
+        request_id = request_id_context.get()
+        phase = "fallback" if is_fallback else "primary"
+        metrics = current_metrics()
+        attempts = total_attempts(settings.llm_max_retries)
+
+        for attempt in range(1, attempts + 1):
+            attempt_started = time.monotonic()
+            if metrics:
+                metrics.llm_calls += 1
+            try:
+                result = await send_once(
+                    url, model, api_key, payload,
+                    timeout=max(0.1, min(timeout, budget_ends - time.monotonic())),
+                    output_token_param=token_param,
                 )
-        if tool_calls:
-            return LLMResult(content=content or None, tool_calls=tool_calls)
-        if not content.strip():
-            raise AgentError("AI_RESPONSE_INVALID", "LLM returned no content", 502)
-        return LLMResult(content=content)
+                latency = (time.monotonic() - attempt_started) * 1000
+                if metrics:
+                    metrics.provider_latency_ms += latency
+                    metrics.record_usage(result.usage)
+                emit_attempt_log(
+                    request_id=request_id, phase=phase, model=model, attempt=attempt,
+                    max_retries=settings.llm_max_retries, latency_ms=latency,
+                    is_fallback=is_fallback, usage=result.usage or None,
+                )
+                return result
+            except AgentError as error:
+                latency = (time.monotonic() - attempt_started) * 1000
+                if metrics:
+                    metrics.provider_latency_ms += latency
+                    if error.code == "RATE_LIMITED":
+                        metrics.rate_limited_429 += 1
+                    if error.code == "PROVIDER_TIMEOUT":
+                        metrics.timeouts += 1
+                details = error.details if isinstance(error.details, dict) else {}
+                emit_attempt_log(
+                    request_id=request_id, phase=phase, model=model, attempt=attempt,
+                    max_retries=settings.llm_max_retries, latency_ms=latency,
+                    is_fallback=is_fallback, error_code=error.code,
+                    origin_status=details.get("origin_status"),
+                )
+                if attempt >= attempts or not is_retryable(error):
+                    raise
+                wait = self._retry_wait(error, attempt, attempt + 1, attempts, budget_ends, metrics)
+                await sleep_with_budget_check(wait, budget_ends)
+        raise AgentError("PROVIDER_UNAVAILABLE", "All provider attempts exhausted", 503, True)
+
+    def _retry_wait(
+        self,
+        error: AgentError,
+        attempt: int,
+        next_attempt: int,
+        attempts: int,
+        budget_ends: float,
+        metrics,
+    ) -> float:
+        details = error.details if isinstance(error.details, dict) else {}
+        wait = calculate_backoff(
+            attempt - 1,
+            settings.llm_retry_base_delay_seconds,
+            settings.llm_retry_max_delay_seconds,
+            details.get("retry_after_seconds"),
+        )
+        remaining = budget_ends - time.monotonic()
+        reserve = wait + settings.llm_retry_min_next_attempt_seconds
+        if wait >= remaining or reserve >= remaining:
+            emit_event(
+                "warning", "llm_retry_aborted_insufficient_budget",
+                model=settings.llm_model, attempt=next_attempt, max_attempts=attempts,
+                wait_seconds=round(wait, 2), remaining_seconds=round(remaining, 2),
+                cause=error.code,
+            )
+            raise AgentError(
+                "AI_DEADLINE_EXCEEDED", "Insufficient time budget for provider retry", 504, True,
+                details={"wait_seconds": round(wait, 2), "remaining_seconds": round(remaining, 2), "cause": error.code},
+            ) from error
+        if metrics:
+            metrics.retries += 1
+        emit_event(
+            "warning", "llm_retry_attempt", model=settings.llm_model,
+            attempt=next_attempt, max_attempts=attempts,
+            wait_seconds=round(wait, 2), cause=error.code,
+        )
+        return wait

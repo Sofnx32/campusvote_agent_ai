@@ -15,9 +15,12 @@ export const verifyUser = (token) => {
   const algorithms = config.userJwtPublicKey ? ['RS256'] : ['HS256'];
   if (!key) throw new AgentError('AI_SERVICE_UNAUTHORIZED', 'User JWT verification key is not configured', 401);
   try {
-    return jwt.verify(token, key, { algorithms });
-  } catch {
-    throw new AgentError('AI_SERVICE_UNAUTHORIZED', 'Invalid user token', 401);
+    return jwt.verify(token, key, { algorithms, clockTolerance: 30 });
+  } catch (error) {
+    const reason = error?.name === 'TokenExpiredError' ? 'TOKEN_EXPIRED' : 'INVALID_TOKEN';
+    const err = new AgentError('AI_SERVICE_UNAUTHORIZED', 'Invalid user token', 401);
+    err.details = { reason };
+    throw err;
   }
 };
 

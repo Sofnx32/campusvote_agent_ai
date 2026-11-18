@@ -21,13 +21,27 @@ class AgentError(Exception):
         self.details = details
 
 
+# Códigos canónicos de Fase 1. Los alias `LLM_*` se conservan para no romper
+# clientes que ya los manejan; el proveedor Python emite los códigos canónicos.
+PHASE1_PROVIDER_CODES = frozenset({
+    "RATE_LIMITED", "PROVIDER_TIMEOUT", "PROVIDER_UNAVAILABLE",
+    "PROVIDER_AUTH_FAILED", "LLM_OUTPUT_TOKEN_LIMIT", "LLM_MODEL_NOT_FOUND",
+    "LLM_INVALID_RESPONSE",
+})
+LEGACY_PROVIDER_CODES = frozenset({
+    "LLM_RATE_LIMITED", "LLM_PROVIDER_TIMEOUT", "LLM_PROVIDER_UNAVAILABLE",
+    "LLM_AUTH_FAILED", "LLM_PROVIDER_AUTH_FAILED",
+})
+
 ERROR_CATALOG = {
     "AUTH": {"AI_SERVICE_UNAUTHORIZED", "AI_CONTEXT_INVALID"},
     "AUTHORIZATION": {"AI_SCOPE_FORBIDDEN", "AI_ORGANIZATION_REQUIRED", "AI_SITE_ASSIGNMENT_REQUIRED"},
     "VALIDATION": {"AI_INVALID_REQUEST", "VALIDATION_INVALID_JSON", "VALIDATION_INVALID_REQUEST", "AI_RESPONSE_INVALID"},
     "NETWORK": {"AI_SERVICE_TIMEOUT", "AI_SERVICE_UNAVAILABLE", "AI_DEADLINE_EXCEEDED"},
-    "AI_PROVIDER": {"LLM_AUTH_FAILED", "LLM_MODEL_NOT_FOUND", "LLM_RATE_LIMITED", "LLM_PROVIDER_TIMEOUT", "LLM_PROVIDER_UNAVAILABLE", "LLM_INVALID_RESPONSE"},
-    "AI_SERVICE": {"AI_TOOL_TIMEOUT", "AI_TOOL_UNAVAILABLE", "AI_SERVICE_EMPTY_RESPONSE", "AI_SERVICE_INVALID_RESPONSE", "AI_BACKEND_EMPTY_RESPONSE", "AI_BACKEND_UNAVAILABLE", "AI_BACKEND_INVALID_RESPONSE"},
+    "AI_PROVIDER": (
+        PHASE1_PROVIDER_CODES | LEGACY_PROVIDER_CODES | {"LLM_MODEL_NOT_FOUND", "LLM_INVALID_RESPONSE"}
+    ),
+    "AI_SERVICE": {"AI_TOOL_TIMEOUT", "AI_TOOL_UNAVAILABLE", "TOOL_EXECUTION_FAILED", "AI_SERVICE_EMPTY_RESPONSE", "AI_SERVICE_INVALID_RESPONSE", "AI_BACKEND_EMPTY_RESPONSE", "AI_BACKEND_UNAVAILABLE", "AI_BACKEND_INVALID_RESPONSE"},
     "DATABASE": {"DATABASE_UNAVAILABLE", "DATABASE_OPERATION_FAILED"},
     "REDIS": {"REDIS_UNAVAILABLE", "AI_CONTEXT_REPLAY_STORE_UNAVAILABLE"},
     "BUSINESS_OPERATION": {"AI_CONFIRMATION_REQUIRED", "AI_OPERATION_CONFLICT", "AI_RESOURCE_NOT_FOUND"},
@@ -56,10 +70,19 @@ PUBLIC_MESSAGES = {
     "AI_DEADLINE_EXCEEDED": "El asistente tardó demasiado en responder. Inténtalo nuevamente.",
     "LLM_PROVIDER_UNAVAILABLE": "El asistente está temporalmente fuera de servicio.",
     "LLM_INVALID_RESPONSE": "El asistente no pudo procesar una respuesta válida. Inténtalo nuevamente.",
+    # Canonical Phase 1 codes
+    "RATE_LIMITED": "El asistente está recibiendo muchas solicitudes. Inténtalo más tarde.",
+    "PROVIDER_TIMEOUT": "El asistente tardó demasiado en responder.",
+    "PROVIDER_UNAVAILABLE": "El asistente está temporalmente fuera de servicio.",
+    "PROVIDER_AUTH_FAILED": "El asistente está temporalmente fuera de servicio.",
+    "TOOL_EXECUTION_FAILED": "No se pudo completar la operación. Inténtalo nuevamente.",
     "AI_INTERNAL_ERROR": "Ocurrió un problema inesperado.",
     "SESSION_EXPIRED": "Tu sesión de administrador ha expirado. Vuelve a iniciar sesión.",
     "SESSION_REVOKED": "Tu sesión ha sido cerrada. Vuelve a iniciar sesión para continuar.",
     "AI_CONTEXT_EXPIRED": "El contexto de la operación ha expirado. La operación se reintentará automáticamente.",
+    # Phase 1 new messages
+    "LLM_OUTPUT_TOKEN_LIMIT": "La respuesta del asistente fue truncada por exceder el límite de tokens. Inténtalo de nuevo con una solicitud más específica.",
+    "LLM_PROVIDER_AUTH_FAILED": "Error de autenticación con el proveedor del modelo. Contacta al administrador.",
 }
 
 

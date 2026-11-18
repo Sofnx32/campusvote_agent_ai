@@ -4,6 +4,7 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from collections import defaultdict
 from datetime import datetime, timezone
+import json
 import logging
 import time
 
@@ -11,14 +12,14 @@ from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
-from .config import settings
+from .config import deadline_chain, settings, validate_configuration
 from .context import verify_context, verify_service_token
 from .errors import AgentError, error_payload
 from .agent import run_agent_turn
 from .llm import get_provider
 from .models import ChatRequest
-from .observability import request_id_context
-from .presentation import sanitize_assistant_content
+from .observability import RequestMetrics, log_request_metrics, metrics_context, request_id_context
+from .presentation import build_ui, sanitize_assistant_content
 from .tools import execute_tool
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
@@ -68,6 +69,11 @@ def save_turn(
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    validate_configuration()
+    logger.info(
+        "deadline_chain_validated requestId=- chain=%s",
+        json.dumps(deadline_chain(), sort_keys=True),
+    )
     yield
 
 
@@ -123,6 +129,7 @@ async def request_context(request: Request, call_next):
     request_id = supplied if supplied and len(supplied) <= 128 and all(c.isalnum() or c in "._:-" for c in supplied) else __import__("uuid").uuid4().hex
     request.state.request_id = request_id
     context_token = request_id_context.set(request_id)
+    metrics_token = metrics_context.set(RequestMetrics(request_id=request_id))
     started = time.monotonic()
     try:
         response = await call_next(request)
@@ -133,12 +140,42 @@ async def request_context(request: Request, call_next):
                     round((time.monotonic() - started) * 1000))
         return response
     finally:
+        log_request_metrics()
+        metrics_context.reset(metrics_token)
         request_id_context.reset(context_token)
 
 
 @app.get("/health")
 async def health():
     return {"success": True, "service": "campusvote-agent-python"}
+
+
+def absolute_deadline(deadline_at: str) -> float:
+    """Convierte `deadline_at` (ISO UTC) a instante absoluto de `time.monotonic()`.
+
+    Captura ambas referencias de reloj en una sola evaluación, dentro de esta
+    función: el tiempo entre medir el restante y anclar el reloj no puede
+    ampliar el presupuesto. Nunca amplía el deadline recibido; lo acota a
+    min(presupuesto_configurado, restante_real).
+    """
+    try:
+        deadline = datetime.fromisoformat(str(deadline_at).replace("Z", "+00:00"))
+    except (TypeError, ValueError) as error:
+        raise AgentError(
+            "AI_DEADLINE_EXCEEDED", "Invalid request deadline", 504, True,
+            details={"reason": "INVALID_DEADLINE_AT"},
+        ) from error
+    if deadline.tzinfo is None:
+        deadline = deadline.replace(tzinfo=timezone.utc)
+    # monotonic primero: cualquier delta existente hace el anclaje conservador.
+    mono_now, wall_now = time.monotonic(), datetime.now(timezone.utc)
+    remaining = (deadline - wall_now).total_seconds()
+    if remaining <= 0:
+        raise AgentError(
+            "AI_DEADLINE_EXCEEDED", "Request deadline already exceeded", 504, True,
+            details={"remaining_seconds": round(remaining, 2)},
+        )
+    return mono_now + min(settings.agent_deadline_seconds, remaining)
 
 
 @app.post("/v1/chat")
@@ -151,6 +188,8 @@ async def chat(
 ):
     verify_service_token(authorization)
     context = verify_context(x_ai_context)
+    # Un único instante absoluto compartido por LLM y herramientas.
+    agent_deadline_at = absolute_deadline(context["deadline_at"])
     if x_correlation_id != payload.correlation_id or x_correlation_id != context["correlation_id"]:
         raise AgentError("AI_INVALID_REQUEST", "Correlation id mismatch", 400)
     context["_raw_token"] = x_ai_context
@@ -163,7 +202,7 @@ async def chat(
         history,
         execute_tool,
         max_tool_calls=settings.max_tool_calls,
-        deadline_seconds=settings.agent_deadline_seconds,
+        deadline_at=agent_deadline_at,
     )
     last_result = results[-1] if results and isinstance(results[-1], dict) else None
     last_action = last_result.get("data") if last_result else None
@@ -195,71 +234,7 @@ async def chat(
     # un resumen conversacional en lugar del payload del backend.
     reply_content = sanitize_assistant_content(reply_content)[:4000]
     save_turn(payload.conversation_id, context, payload.message, reply_content)
-    ui = {"type": "message", "schema": None, "data": None, "actions": []}
-    operation = None
-    if isinstance(last_action, dict) and last_action.get("status") == "confirmation_required":
-        proposal = last_action.get("proposal", {})
-        if last_action.get("tool") == "createFair":
-            fields = [
-                {"name": "name", "type": "text", "label": "Nombre", "required": True, "max_length": 200},
-                {"name": "description", "type": "textarea", "label": "Descripción", "required": False, "max_length": 5000},
-                {"name": "starts_at", "type": "datetime", "label": "Inicio (fecha y hora)", "required": False},
-                {"name": "ends_at", "type": "datetime", "label": "Fin (fecha y hora)", "required": False},
-                {"name": "registration_deadline", "type": "datetime", "label": "Cierre de inscripción", "required": False},
-                {"name": "image_url", "type": "image", "label": "Portada", "required": True},
-            ]
-            title = "Crear feria"
-        else:
-            title_by_tool = {
-                "createFairRubric": "Crear rúbrica",
-                "addFairRubricCriterion": "Agregar criterio de rúbrica",
-                "createCategoryFairRubric": "Crear rúbrica por categoría",
-                "addCategoryFairRubricCriterion": "Agregar criterio por categoría",
-                "createTeachingCriterion": "Crear criterio de evaluación docente",
-                "updateTeachingCriterion": "Actualizar criterio de evaluación docente",
-                "toggleTeachingCriterion": "Cambiar estado del criterio docente",
-                "deleteTeachingCriterion": "Eliminar criterio de evaluación docente",
-                "updateFair": "Actualizar feria",
-                "changeFairStatus": "Cambiar estado de feria",
-                "createFairStand": "Crear stand",
-                "updateFairStand": "Actualizar stand",
-                "deleteFairStand": "Eliminar stand",
-            }
-            labels = {
-                "name": "Nombre", "description": "Descripción", "code": "Código del stand",
-                "min_score": "Puntaje mínimo", "max_score": "Puntaje máximo", "position": "Posición",
-                "points": "Puntos",
-                "status": "Estado", "starts_at": "Inicio (fecha y hora)", "ends_at": "Fin (fecha y hora)",
-                "registration_deadline": "Cierre de inscripción (fecha y hora)",
-            }
-            fields = [
-                {"name": key, "type": "number" if key in {"min_score", "max_score", "position"} else "datetime" if key in {"starts_at", "ends_at", "registration_deadline"} else "select" if key == "status" else "textarea" if key == "description" else "text",
-                 "label": labels.get(key, key.replace("_", " ").capitalize()), "required": False,
-                 **({"options": [{"value": status, "label": status} for status in ["DRAFT", "OPEN", "CLOSED"]]} if key == "status" else {}),
-                 **({"max_length": 5000} if key == "description" else {})}
-                for key in proposal if not key.endswith("_id")
-            ]
-            title = title_by_tool.get(last_action.get("tool"), "Revisar operación")
-        ui = {
-            "type": "confirmation",
-            "schema": {"title": title, "fields": fields},
-            "data": {**{key: value for key, value in proposal.items() if not key.endswith("_id")}, "site_name": last_action.get("site_name")},
-            "actions": ["confirm", "edit", "cancel"],
-        }
-        operation = {
-            "id": last_action.get("operation_id"),
-            "version": last_action.get("version"),
-            "status": "awaiting_confirmation",
-        }
-    elif isinstance(last_action, dict) and last_action.get("status") == "created":
-        # La tarjeta de éxito la construye el agente Node con un view-model
-        # legible; Python nunca reenvía el registro crudo del backend.
-        ui = {"type": "message", "schema": None, "data": None, "actions": []}
-        operation = {
-            "id": last_action.get("operation_id"),
-            "version": last_action.get("version"),
-            "status": "completed",
-        }
+    ui, operation = build_ui(last_action)
     return {
         "success": True,
         "conversation_id": payload.conversation_id,
@@ -268,5 +243,5 @@ async def chat(
         "operation": operation,
         "citations": [],
         "suggested_actions": [],
-        "meta": {"correlation_id": payload.correlation_id, "tool_calls": len(results), "truncated": False, "last_tool": last_tool, "tool_data": tool_data},
+        "meta": {"correlation_id": payload.correlation_id, "tool_calls": len(results), "truncated": bool(current.truncated), "last_tool": last_tool, "tool_data": tool_data},
     }
