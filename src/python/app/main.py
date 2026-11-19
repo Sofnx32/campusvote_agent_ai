@@ -21,60 +21,125 @@ from .models import ChatRequest
 from .observability import RequestMetrics, log_request_metrics, metrics_context, request_id_context
 from .presentation import build_ui, sanitize_assistant_content
 from .tools import execute_tool
+from .conversation_store import ConversationStore
+from .conversation_memory import ConversationMemory, TurnContext
+from .decision_layer import decide, decision_metrics
+from .direct_response import direct_response, direct_response_metrics, DirectResponseState
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 logger = logging.getLogger("campusvote-agent-python")
 provider = get_provider()
-conversation_history: dict[str, list[dict]] = defaultdict(list)
-conversation_touched: dict[str, datetime] = {}
+conversation_store: ConversationStore | None = None
+conversation_memories: dict[str, ConversationMemory] = {}
 
 
 def conversation_key(conversation_id: str | None, context: dict) -> str | None:
+    """Clave aislada por usuario, organización, sede y conversación.
+
+    ``organization_id`` y ``site_id`` se toman exclusivamente del contexto
+    verificado (JWT RS256), nunca del cuerpo de la solicitud. Si falta alguno,
+    se devuelve ``None`` para fallar cerrado sin acceder a Redis.
+
+    Migración: las claves antiguas ``sub:org:conv`` no se leen ni se migran
+    (no hay fallback inseguro entre esquemas). Se dejan expirar por el TTL de
+    conversación configurado en ``AI_CONVERSATION_TTL_SECONDS`` (1800 s por
+    defecto), tras lo cual Redis las elimina automáticamente.
+    """
     if not conversation_id:
         return None
-    return f"{context['sub']}:{context['organization_id']}:{conversation_id}"
+    sub = context.get("sub")
+    organization_id = context.get("organization_id")
+    site_id = context.get("site_id")
+    if not all(isinstance(value, str) and value for value in (sub, organization_id, site_id)):
+        return None
+    return f"{sub}:{organization_id}:{site_id}:{conversation_id}"
 
 
-def get_history(conversation_id: str | None, context: dict) -> list[dict]:
+async def get_history(conversation_id: str | None, context: dict) -> list[dict]:
+    """Recupera historial para el LLM (solo role + content)."""
     key = conversation_key(conversation_id, context)
-    if not key:
+    if not key or conversation_store is None:
         return []
-    touched = conversation_touched.get(key)
-    if not touched or (datetime.now(timezone.utc) - touched).total_seconds() > settings.conversation_ttl_seconds:
-        conversation_history.pop(key, None)
-        conversation_touched.pop(key, None)
-        return []
-    return list(conversation_history[key])
+    return await conversation_store.get_history(key)
 
 
-def save_turn(
+async def save_turn(
     conversation_id: str | None,
     context: dict,
     user_message: str,
     assistant_message: str,
+    tool_calls: list[dict] | None = None,
+    tool_results: list[dict] | None = None,
+    entities: dict[str, str] | None = None,
+    pending_operation: dict | None = None,
+    confirmation_state: str = "none",
 ) -> None:
+    """Guarda turno enriquecido en el almacén persistente y actualiza memoria."""
     key = conversation_key(conversation_id, context)
-    if not key:
+    if not key or conversation_store is None:
         return
-    history = conversation_history[key]
-    history.extend(
-        [
-            {"role": "user", "content": user_message},
-            {"role": "assistant", "content": assistant_message},
-        ]
+
+    # Guardar en almacén persistente (con tool_calls, tool_results, entities y estado)
+    await conversation_store.append_turn(
+        key,
+        user_message,
+        assistant_message,
+        tool_calls,
+        tool_results,
+        entities,
+        pending_operation=pending_operation,
+        confirmation_state=confirmation_state,
     )
-    del history[:-settings.conversation_max_messages]
-    conversation_touched[key] = datetime.now(timezone.utc)
+
+    # Actualizar memoria conversacional (Nivel 2 y 3)
+    memory = conversation_memories.get(key)
+    if memory is None:
+        memory = ConversationMemory()
+        conversation_memories[key] = memory
+
+    memory.start_turn()
+    memory.end_turn(user_message, assistant_message, tool_calls, tool_results, entities)
+    memory.session.pending_operation = pending_operation
+    memory.session.confirmation_state = confirmation_state
+
+
+async def get_or_create_memory(conversation_id: str | None, context: dict) -> ConversationMemory | None:
+    """Obtiene la memoria de una conversación, reconstruyéndola desde el historial si es necesario."""
+    key = conversation_key(conversation_id, context)
+    if not key or conversation_store is None:
+        return None
+
+    # Si ya está en memoria, devolverla
+    if key in conversation_memories:
+        return conversation_memories[key]
+
+    # Reconstruir desde el historial completo persistido
+    full_history = await conversation_store.get_full_history(key)
+    if full_history:
+        memory = ConversationMemory.rebuild_from_history(full_history)
+        conversation_memories[key] = memory
+        return memory
+
+    # No hay historial, crear memoria nueva
+    memory = ConversationMemory()
+    conversation_memories[key] = memory
+    return memory
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     validate_configuration()
+    global conversation_store
+    conversation_store = await ConversationStore.create(
+        max_messages=settings.conversation_max_messages,
+        ttl_seconds=settings.conversation_ttl_seconds,
+    )
     logger.info(
         "deadline_chain_validated requestId=- chain=%s",
         json.dumps(deadline_chain(), sort_keys=True),
     )
     yield
+    conversation_store = None
 
 
 app = FastAPI(title="CampusVote Agent AI", version="0.1.0", lifespan=lifespan)
@@ -147,6 +212,14 @@ async def request_context(request: Request, call_next):
 
 @app.get("/health")
 async def health():
+    # Check if conversation store (Redis) is initialized and responsive
+    if conversation_store is None:
+        raise HTTPException(status_code=503, detail={"success": False, "service": "campusvote-agent-python", "reason": "store_not_initialized"})
+    if conversation_store.redis:
+        try:
+            await conversation_store.redis.ping()
+        except Exception:
+            raise HTTPException(status_code=503, detail={"success": False, "service": "campusvote-agent-python", "reason": "redis_unavailable"})
     return {"success": True, "service": "campusvote-agent-python"}
 
 
@@ -194,16 +267,72 @@ async def chat(
         raise AgentError("AI_INVALID_REQUEST", "Correlation id mismatch", 400)
     context["_raw_token"] = x_ai_context
     context["conversation_id"] = payload.conversation_id
-    history = get_history(payload.conversation_id, context)
-    current, results = await run_agent_turn(
-        provider,
-        context,
+    # Orden estricto: la lectura del historial y la reconstrucción de memoria
+    # finalizan antes de ejecutar el agente; la escritura ocurre al final.
+    history = await get_history(payload.conversation_id, context)
+    memory = await get_or_create_memory(payload.conversation_id, context)
+    entities = {}
+    if memory:
+        entities = memory.extract_entities_from_message(payload.message)
+    # Resolución determinista ANTES de la decisión del agente. No ejecuta
+    # herramientas ni hace llamadas LLM adicionales; solo produce datos.
+    turn_context = memory.resolve_turn_context(payload.message) if memory else TurnContext()
+    context["conversation_context"] = turn_context.to_dict()
+    # Decision Layer: clasificación local y determinista ANTES del agente. No
+    # ejecuta herramientas, no hace LLM adicional y no autoriza escrituras.
+    decision = decide(
         payload.message,
-        history,
-        execute_tool,
-        max_tool_calls=settings.max_tool_calls,
-        deadline_at=agent_deadline_at,
+        turn_context,
+        history_available=bool(history),
     )
+    context["decision"] = decision.to_dict()
+    logger.info(json.dumps(
+        decision_metrics(decision, request_id_context.get()), ensure_ascii=False
+    ))
+
+    # Direct Response Layer: intenta responder directamente con evidencia
+    # verificable SIN invocar LLM ni herramientas.
+    direct = direct_response(
+        payload.message,
+        decision,
+        turn_context,
+        memory,
+        history,
+    )
+    logger.info(json.dumps(
+        direct_response_metrics(direct, request_id_context.get()), ensure_ascii=False
+    ))
+
+    if direct is not None and direct.state == DirectResponseState.ANSWERED:
+        # Respuesta directa: omitir LLM y herramientas completamente.
+        # Persistir turno con el mismo mecanismo y orden del flujo normal.
+        reply_content = direct.text
+        tool_calls_serializable = None
+        tool_results_serializable = []
+        # No hay operación pendiente nueva desde respuesta directa
+        pending_operation = None
+        confirmation_state = "none"
+        # current simulado para construir respuesta y métricas
+        class _DirectCurrent:
+            content = ""
+            tool_calls = []
+            truncated = False
+        current = _DirectCurrent()
+        current.content = direct.text  # Usar la respuesta directa como contenido
+        results = []
+    else:
+        # Fallback: flujo normal con run_agent_turn
+        current, results = await run_agent_turn(
+            provider,
+            context,
+            payload.message,
+            history,
+            execute_tool,
+            max_tool_calls=settings.max_tool_calls,
+            deadline_at=agent_deadline_at,
+            turn_context=turn_context,
+            decision=decision,
+        )
     last_result = results[-1] if results and isinstance(results[-1], dict) else None
     last_action = last_result.get("data") if last_result else None
     last_tool = last_result.get("tool") if last_result else None
@@ -233,7 +362,50 @@ async def chat(
     # Última barrera: si el modelo volcó un JSON técnico, la conversación recibe
     # un resumen conversacional en lugar del payload del backend.
     reply_content = sanitize_assistant_content(reply_content)[:4000]
-    save_turn(payload.conversation_id, context, payload.message, reply_content)
+
+    # Extraer tool_calls serializables
+    tool_calls_serializable = [
+        {"id": tc.id, "name": tc.name, "arguments": tc.arguments}
+        for tc in current.tool_calls
+    ] if current.tool_calls else None
+
+    # Extraer tool_results con nombre de herramienta
+    tool_results_serializable = []
+    for i, result in enumerate(results):
+        if isinstance(result, dict):
+            tool_name = None
+            if i < len(current.tool_calls):
+                tool_name = current.tool_calls[i].name
+            tool_results_serializable.append({
+                "tool": tool_name,
+                "success": result.get("success"),
+                "data": result.get("data"),
+                "error": result.get("error"),
+            })
+
+    # Estado de confirmación derivado del resultado real del turno (Node sigue
+    # siendo la fuente de verdad de las propuestas pendientes).
+    pending_operation = None
+    confirmation_state = "none"
+    if isinstance(last_action, dict) and last_action.get("status") == "confirmation_required":
+        pending_operation = {
+            "tool": last_action.get("tool") or last_tool,
+            "operation_id": last_action.get("operation_id"),
+            "version": last_action.get("version"),
+        }
+        confirmation_state = "awaiting_confirmation"
+
+    await save_turn(
+        payload.conversation_id,
+        context,
+        payload.message,
+        reply_content,
+        tool_calls=tool_calls_serializable,
+        tool_results=tool_results_serializable,
+        entities=entities if entities else None,
+        pending_operation=pending_operation,
+        confirmation_state=confirmation_state,
+    )
     ui, operation = build_ui(last_action)
     return {
         "success": True,

@@ -12,9 +12,18 @@ dependencies = [
     "python-jose>=3.4.0",
 ]
 
+[project.optional-dependencies]
+test = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    "cryptography>=42.0.0",
+    "PyJWT>=2.9.0",
+]
+
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 testpaths = ["tests/python"]
+asyncio_mode = "auto"
 
 [tool.setuptools.packages.find]
 where = ["src"]

@@ -33,6 +33,15 @@ LEGACY_PROVIDER_CODES = frozenset({
     "LLM_AUTH_FAILED", "LLM_PROVIDER_AUTH_FAILED",
 })
 
+# Códigos de validación de herramientas (Fase 2.6)
+TOOL_VALIDATION_CODES = frozenset({
+    "TOOL_NOT_FOUND",         # No existe en el registro canónico (TOOLS)
+    "TOOL_NOT_ALLOWED",       # Existe en TOOLS pero no en allowlist del ciclo
+    "TOOLS_DISABLED",         # Decision Layer deshabilitó herramientas (allow_tools=False)
+    "TOOL_LIMIT_EXCEEDED",    # Supera max_tool_calls configurado
+    "INVALID_TOOL_CALL",      # Estructura inválida (parser)
+})
+
 ERROR_CATALOG = {
     "AUTH": {"AI_SERVICE_UNAUTHORIZED", "AI_CONTEXT_INVALID"},
     "AUTHORIZATION": {"AI_SCOPE_FORBIDDEN", "AI_ORGANIZATION_REQUIRED", "AI_SITE_ASSIGNMENT_REQUIRED"},
@@ -47,6 +56,7 @@ ERROR_CATALOG = {
     "BUSINESS_OPERATION": {"AI_CONFIRMATION_REQUIRED", "AI_OPERATION_CONFLICT", "AI_RESOURCE_NOT_FOUND"},
     "SESSION": {"SESSION_EXPIRED", "SESSION_REVOKED", "AI_CONTEXT_EXPIRED"},
     "INTERNAL": {"AI_INTERNAL_ERROR"},
+    "TOOL_VALIDATION": TOOL_VALIDATION_CODES,
 }
 
 # Errores de negocio que el modelo puede corregir en el mismo turno (por
@@ -56,6 +66,9 @@ CORRECTABLE_CODES = {
     "AI_CONFIRMATION_REQUIRED",
     "AI_OPERATION_CONFLICT",
     "AI_RESOURCE_NOT_FOUND",
+    "INVALID_TOOL_CALL",
+    "TOOL_NOT_ALLOWED",
+    "TOOL_LIMIT_EXCEEDED",
 }
 
 PUBLIC_MESSAGES = {
@@ -83,6 +96,12 @@ PUBLIC_MESSAGES = {
     # Phase 1 new messages
     "LLM_OUTPUT_TOKEN_LIMIT": "La respuesta del asistente fue truncada por exceder el límite de tokens. Inténtalo de nuevo con una solicitud más específica.",
     "LLM_PROVIDER_AUTH_FAILED": "Error de autenticación con el proveedor del modelo. Contacta al administrador.",
+    # Phase 2.6: Tool validation messages
+    "TOOL_NOT_FOUND": "La herramienta solicitada no existe.",
+    "TOOL_NOT_ALLOWED": "La herramienta solicitada no está disponible para esta consulta.",
+    "TOOLS_DISABLED": "Las herramientas están deshabilitadas para este turno.",
+    "TOOL_LIMIT_EXCEEDED": "Se ha superado el límite de herramientas por turno.",
+    "INVALID_TOOL_CALL": "La llamada a herramienta tiene una estructura inválida.",
 }
 
 

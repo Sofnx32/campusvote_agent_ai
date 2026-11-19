@@ -2,14 +2,29 @@ import os
 from datetime import datetime, timedelta, timezone
 
 import jwt
+import pytest
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.primitives import serialization
 
-os.environ["AI_SERVICE_TOKEN"] = "x" * 32
-
-from app.config import settings
+from app.config import settings, reset_settings_for_testing
 from app.context import verify_context, verify_service_token
 from app.errors import AgentError
+
+
+@pytest.fixture(autouse=True)
+def reset_config(monkeypatch):
+    """Aísla la configuración: `settings` refleja el entorno controlado por el test.
+
+    `monkeypatch.setenv` controla explícitamente AI_SERVICE_TOKEN y restaura el
+    entorno al finalizar. El estado del singleton se snapshottea y se restaura
+    para no contaminar otros módulos que compartan la misma instancia.
+    """
+    original_settings = dict(settings.__dict__)
+    monkeypatch.setenv("AI_SERVICE_TOKEN", "x" * 32)
+    reset_settings_for_testing()
+    yield
+    # Restaurar el estado de configuración; monkeypatch restaura el entorno.
+    object.__setattr__(settings, "__dict__", original_settings)
 
 
 def test_service_token_requires_exact_value():

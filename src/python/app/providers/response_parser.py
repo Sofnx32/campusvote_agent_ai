@@ -1,9 +1,14 @@
-"""Parseo de respuestas OpenAI-compatible: tool calls y límite de salida."""
+"""Parseo de respuestas OpenAI-compatible: tool calls y límite de salida.
+
+El parser valida los tool_calls contra el registro canónico (TOOLS) y propaga
+la allowlist inmutable del ciclo LLM actual para validación pre-ejecución.
+"""
 
 from __future__ import annotations
 
 import json
 import uuid
+from typing import FrozenSet
 
 from ..errors import AgentError
 from ..models import LLMResult, ToolCall
@@ -12,12 +17,19 @@ from .telemetry import emit_event
 from .tool_registry import TOOLS
 
 
-def _tool_calls_from(raw_calls: object, model: str) -> list[ToolCall]:
+def _tool_calls_from(
+    raw_calls: object,
+    model: str,
+    allowed_tools: FrozenSet[str],
+) -> list[ToolCall]:
     """Parsea y valida SIEMPRE los ``tool_calls`` recibidos del proveedor.
 
     Que no se hayan anunciado schemas (conversación general, ``allow_tools=False``
     o fallback) no autoriza a descartar llamadas: deben validarse contra ``TOOLS``
     y producir un error funcional explícito si son inválidas.
+
+    Cada ToolCall recibe la allowlist inmutable del ciclo para validación
+    pre-ejecución centralizada sin recálculos ni estado global mutable.
     """
     if not raw_calls:
         return []
@@ -52,6 +64,7 @@ def _tool_calls_from(raw_calls: object, model: str) -> list[ToolCall]:
                 id=str(raw.get("id") or f"call_{uuid.uuid4().hex}"),
                 name=name,
                 arguments=arguments,
+                allowed_tools=allowed_tools,
             )
         )
     return parsed
@@ -63,8 +76,14 @@ def parse_response(
     model: str,
     output_token_param: str,
     latency_ms: float,
+    allowed_tools: FrozenSet[str] = frozenset(),
 ) -> LLMResult:
-    """Convierte el body del proveedor en LLMResult o error controlado."""
+    """Convierte el body del proveedor en LLMResult o error controlado.
+
+    Args:
+        allowed_tools: Allowlist inmutable de herramientas anunciadas en ESTE ciclo LLM.
+            Se propaga a cada ToolCall para validación pre-ejecución.
+    """
     if not isinstance(body, dict):
         raise ValueError("provider body must be an object")
     choices = body.get("choices")
@@ -106,11 +125,11 @@ def parse_response(
     content = message.get("content")
     if not isinstance(content, str):
         content = ""
-    tool_calls = _tool_calls_from(message.get("tool_calls"), model)
+    tool_calls = _tool_calls_from(message.get("tool_calls"), model, allowed_tools)
     if tool_calls:
-        result = LLMResult(content=content or None, tool_calls=tool_calls)
+        result = LLMResult(content=content or None, tool_calls=tool_calls, allowed_tools=allowed_tools)
     elif content.strip():
-        result = LLMResult(content=content)
+        result = LLMResult(content=content, allowed_tools=allowed_tools)
     else:
         raise AgentError("AI_RESPONSE_INVALID", "LLM returned no content", 502)
 

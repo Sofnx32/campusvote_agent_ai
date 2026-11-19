@@ -61,7 +61,10 @@ class RecordingProvider:
 
 
 def test_case_a_general_conversation_does_not_execute_unexpected_tool(monkeypatch):
-    """A) 'hola' -> selector [], sin schemas; tool_call inesperado: 0 ejecuciones."""
+    """A) 'hola' -> selector [], sin schemas; tool_call inesperado: 0 ejecuciones.
+
+    Fase 2.6: error TOOL_NOT_ALLOWED (herramienta existe pero no en allowlist).
+    """
     executed, captured = [], []
     Provider, AgentError = make_provider(
         monkeypatch, response=tool_response("getSiteFairs", {}), captured=captured,
@@ -73,10 +76,10 @@ def test_case_a_general_conversation_does_not_execute_unexpected_tool(monkeypatc
             Provider(), CONTEXT, "hola", [], spy(executed),
             max_tool_calls=5, deadline_seconds=5,
         ))
-    assert error.value.code == "AI_TOOL_NOT_FOUND"
+    assert error.value.code == "TOOL_NOT_ALLOWED"
     assert executed == []
     assert "tools" not in captured[0]["json"]
-    assert error.value.details["reason"] == "TOOL_NOT_AUTHORIZED"
+    assert error.value.details["reason"] == "TOOL_NOT_ALLOWED"
 
 
 def test_case_b_allow_tools_false_does_not_execute_unexpected_tool(monkeypatch):
@@ -119,7 +122,10 @@ def test_case_c_authorized_subset_tool_is_executed(monkeypatch):
 
 
 def test_case_d_registered_tool_outside_subset_is_rejected(monkeypatch):
-    """D) Registrada en TOOLS pero fuera del subconjunto: rechazo y 0 ejecuciones."""
+    """D) Registrada en TOOLS pero fuera del subconjunto: rechazo y 0 ejecuciones.
+
+    Fase 2.6: error TOOL_NOT_ALLOWED (existe en TOOLS pero no en allowlist).
+    """
     executed, captured = [], []
     Provider, AgentError = make_provider(
         monkeypatch, response=tool_response("getSiteResults", {}), captured=captured,
@@ -133,9 +139,10 @@ def test_case_d_registered_tool_outside_subset_is_rejected(monkeypatch):
             Provider(), CONTEXT, FERIAS, [], spy(executed),
             max_tool_calls=5, deadline_seconds=5,
         ))
-    assert error.value.code == "AI_TOOL_NOT_FOUND"
+    assert error.value.code == "TOOL_NOT_ALLOWED"
     assert executed == []
     assert error.value.details["tool"] == "getSiteResults"
+    assert error.value.details["reason"] == "TOOL_NOT_ALLOWED"
 
 
 def test_case_e_unknown_name_is_rejected_before_execution(monkeypatch):

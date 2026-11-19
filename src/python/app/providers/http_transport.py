@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import time
+from typing import FrozenSet
 
 import httpx
 
@@ -54,8 +55,13 @@ async def send_once(
     *,
     timeout: float,
     output_token_param: str,
+    allowed_tools: FrozenSet[str] = frozenset(),
 ) -> LLMResult:
-    """Ejecuta una única petición; no reintenta ni ejecuta herramientas."""
+    """Ejecuta una única petición; no reintenta ni ejecuta herramientas.
+
+    Args:
+        allowed_tools: Allowlist inmutable del ciclo LLM actual para propagar al parser.
+    """
     started = time.monotonic()
     try:
         async with httpx.AsyncClient(timeout=timeout) as client:
@@ -73,6 +79,7 @@ async def send_once(
         return parse_response(
             body, payload, model, output_token_param,
             (time.monotonic() - started) * 1000,
+            allowed_tools,
         )
     except httpx.TimeoutException as error:
         emit_event("warning", "llm_provider_error", model=model, cause="timeout")

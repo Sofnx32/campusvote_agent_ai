@@ -1,5 +1,5 @@
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -28,48 +28,54 @@ _load_repository_env()
 
 @dataclass(frozen=True)
 class Settings:
-    environment: str = os.getenv("NODE_ENV", "development")
-    service_token: str = os.getenv("AI_SERVICE_TOKEN", "")
-    mtls_required: bool = os.getenv("AI_MTLS_REQUIRED", "false").lower() == "true"
-    mtls_ca_path: str = os.getenv("AI_MTLS_CA_PATH", "")
-    mtls_cert_path: str = os.getenv("AI_MTLS_CERT_PATH", "")
-    mtls_key_path: str = os.getenv("AI_MTLS_KEY_PATH", "")
-    context_public_key_path: str = os.getenv("AI_CONTEXT_PUBLIC_KEY_PATH", "")
-    context_public_key: str = os.getenv("AI_CONTEXT_PUBLIC_KEY", "")
-    context_issuer: str = os.getenv("AI_CONTEXT_ISSUER", "campusvote-api")
-    context_audience: str = os.getenv("AI_CONTEXT_AUDIENCE", "campusvote-agent-ai")
-    node_tools_url: str = os.getenv("NODE_TOOLS_URL", "http://127.0.0.1:3000")
-    llm_provider: str = os.getenv("LLM_PROVIDER", "openai-compatible")
-    llm_url: str = os.getenv("LLM_URL", os.getenv("LLM_BASE_URL", ""))
-    llm_model: str = os.getenv("LLM_MODEL", "")
-    llm_api_key: str = os.getenv("LLM_API_KEY", "")
-    llm_fallback_url: str = os.getenv("LLM_FALLBACK_URL", "")
-    llm_fallback_model: str = os.getenv("LLM_FALLBACK_MODEL", "")
-    llm_fallback_api_key: str = os.getenv("LLM_FALLBACK_API_KEY", "")
-    llm_timeout_seconds: float = float(os.getenv("LLM_TIMEOUT_SECONDS", "7"))
-    llm_total_budget_seconds: float = float(os.getenv("LLM_TOTAL_BUDGET_SECONDS", "18"))
+    # Cada campo se resuelve del entorno al *instanciar* (default_factory), no al
+    # importar el módulo. El singleton `settings` de abajo se construye una sola
+    # vez durante el import (comportamiento de producción idéntico), pero los
+    # tests pueden reconstruir la configuración tras mutar variables de entorno
+    # mediante `reset_settings_for_testing`.
+    environment: str = field(default_factory=lambda: os.getenv("NODE_ENV", "development"))
+    service_token: str = field(default_factory=lambda: os.getenv("AI_SERVICE_TOKEN", ""))
+    mtls_required: bool = field(default_factory=lambda: os.getenv("AI_MTLS_REQUIRED", "false").lower() == "true")
+    mtls_ca_path: str = field(default_factory=lambda: os.getenv("AI_MTLS_CA_PATH", ""))
+    mtls_cert_path: str = field(default_factory=lambda: os.getenv("AI_MTLS_CERT_PATH", ""))
+    mtls_key_path: str = field(default_factory=lambda: os.getenv("AI_MTLS_KEY_PATH", ""))
+    context_public_key_path: str = field(default_factory=lambda: os.getenv("AI_CONTEXT_PUBLIC_KEY_PATH", ""))
+    context_public_key: str = field(default_factory=lambda: os.getenv("AI_CONTEXT_PUBLIC_KEY", ""))
+    context_issuer: str = field(default_factory=lambda: os.getenv("AI_CONTEXT_ISSUER", "campusvote-api"))
+    context_audience: str = field(default_factory=lambda: os.getenv("AI_CONTEXT_AUDIENCE", "campusvote-agent-ai"))
+    node_tools_url: str = field(default_factory=lambda: os.getenv("NODE_TOOLS_URL", "http://127.0.0.1:3000"))
+    llm_provider: str = field(default_factory=lambda: os.getenv("LLM_PROVIDER", "openai-compatible"))
+    llm_url: str = field(default_factory=lambda: os.getenv("LLM_URL", os.getenv("LLM_BASE_URL", "")))
+    llm_model: str = field(default_factory=lambda: os.getenv("LLM_MODEL", ""))
+    llm_api_key: str = field(default_factory=lambda: os.getenv("LLM_API_KEY", ""))
+    llm_fallback_url: str = field(default_factory=lambda: os.getenv("LLM_FALLBACK_URL", ""))
+    llm_fallback_model: str = field(default_factory=lambda: os.getenv("LLM_FALLBACK_MODEL", ""))
+    llm_fallback_api_key: str = field(default_factory=lambda: os.getenv("LLM_FALLBACK_API_KEY", ""))
+    llm_timeout_seconds: float = field(default_factory=lambda: float(os.getenv("LLM_TIMEOUT_SECONDS", "7")))
+    llm_total_budget_seconds: float = field(default_factory=lambda: float(os.getenv("LLM_TOTAL_BUDGET_SECONDS", "18")))
     # LLM output token limit. `llm_output_token_param` selects the provider-compatible
     # request field: "max_tokens", "max_completion_tokens" or "auto" (heuristic by model).
-    llm_max_output_tokens: int = int(os.getenv("LLM_MAX_OUTPUT_TOKENS", "2000"))
-    llm_output_token_param: str = os.getenv("LLM_OUTPUT_TOKEN_PARAM", "auto").strip().lower()
+    llm_max_output_tokens: int = field(default_factory=lambda: int(os.getenv("LLM_MAX_OUTPUT_TOKENS", "2000")))
+    llm_output_token_param: str = field(default_factory=lambda: os.getenv("LLM_OUTPUT_TOKEN_PARAM", "auto").strip().lower())
     # Fallback budget reserved from total budget (seconds).
-    llm_fallback_budget_seconds: float = float(os.getenv("LLM_FALLBACK_BUDGET_SECONDS", "5"))
+    llm_fallback_budget_seconds: float = field(default_factory=lambda: float(os.getenv("LLM_FALLBACK_BUDGET_SECONDS", "5")))
     # Max LLM retries (total attempts = 1 + this value, hard-capped at 3 total).
-    llm_max_retries: int = int(os.getenv("LLM_MAX_RETRIES", "2"))
+    llm_max_retries: int = field(default_factory=lambda: int(os.getenv("LLM_MAX_RETRIES", "2")))
     # Base delay for exponential backoff (seconds).
-    llm_retry_base_delay_seconds: float = float(os.getenv("LLM_RETRY_BASE_DELAY_SECONDS", "1.0"))
+    llm_retry_base_delay_seconds: float = field(default_factory=lambda: float(os.getenv("LLM_RETRY_BASE_DELAY_SECONDS", "1.0")))
     # Maximum backoff delay (seconds).
-    llm_retry_max_delay_seconds: float = float(os.getenv("LLM_RETRY_MAX_DELAY_SECONDS", "10.0"))
+    llm_retry_max_delay_seconds: float = field(default_factory=lambda: float(os.getenv("LLM_RETRY_MAX_DELAY_SECONDS", "10.0")))
     # Minimum time reserved to actually perform the next attempt after a backoff.
-    llm_retry_min_next_attempt_seconds: float = float(os.getenv("LLM_RETRY_MIN_NEXT_ATTEMPT_SECONDS", "0.5"))
-    max_tool_calls: int = int(os.getenv("AI_MAX_TOOL_CALLS", "5"))
+    llm_retry_min_next_attempt_seconds: float = field(default_factory=lambda: float(os.getenv("LLM_RETRY_MIN_NEXT_ATTEMPT_SECONDS", "0.5")))
+    max_tool_calls: int = field(default_factory=lambda: int(os.getenv("AI_MAX_TOOL_CALLS", "5")))
     # Coherent with Node `chatTimeoutMs=25s` and AI Context JWT TTL `60s`:
     # 20s (agent) < 25s (Node HTTP) < 60s (JWT). Never raise this above the
     # Node timeout without raising `AI_CHAT_TIMEOUT_MS` in the same deploy.
-    agent_deadline_seconds: float = float(os.getenv("AI_AGENT_DEADLINE_SECONDS", "20"))
-    tool_timeout_seconds: float = float(os.getenv("AI_TOOL_TIMEOUT_SECONDS", "5"))
-    conversation_max_messages: int = int(os.getenv("AI_CONVERSATION_MAX_MESSAGES", "20"))
-    conversation_ttl_seconds: int = int(os.getenv("AI_CONVERSATION_TTL_SECONDS", "1800"))
+    agent_deadline_seconds: float = field(default_factory=lambda: float(os.getenv("AI_AGENT_DEADLINE_SECONDS", "20")))
+    tool_timeout_seconds: float = field(default_factory=lambda: float(os.getenv("AI_TOOL_TIMEOUT_SECONDS", "5")))
+    conversation_max_messages: int = field(default_factory=lambda: int(os.getenv("AI_CONVERSATION_MAX_MESSAGES", "20")))
+    conversation_ttl_seconds: int = field(default_factory=lambda: int(os.getenv("AI_CONVERSATION_TTL_SECONDS", "1800")))
+    max_history_messages: int = field(default_factory=lambda: int(os.getenv("AI_MAX_HISTORY_MESSAGES", "12")))
 
     def public_key(self) -> str:
         if self.context_public_key:
@@ -212,3 +218,23 @@ def effective_budget_seconds(
 # Validación durante la carga de configuración: cualquier valor imposible
 # detiene la importación con un ConfigurationError descriptivo.
 validate_configuration()
+
+
+# Función auxiliar para testing: permite reinicializar settings desde el entorno actual.
+def reset_settings_for_testing(**env_overrides: str) -> None:
+    """Reconstruye el singleton `settings` leyendo el entorno actual (solo testing).
+
+    Aplica primero `env_overrides` a `os.environ` y luego reinstancia `Settings`,
+    cuyos campos usan `default_factory` y por tanto se resuelven en ese momento.
+    El objeto se muta en sitio (`object.__setattr__` sobre `__dict__`) para que
+    los módulos que hicieron `from .config import settings` --p. ej. `context`--
+    vean los nuevos valores sin necesidad de reimportar.
+
+    Esto evita el problema de aislamiento en el que el orden de importación de
+    pytest hacía que `settings` conservara valores de un entorno anterior.
+    """
+    global settings
+    for key, value in env_overrides.items():
+        os.environ[key] = value
+    # `Settings()` re-evalúa los default_factory contra el entorno vigente.
+    object.__setattr__(settings, "__dict__", Settings().__dict__)

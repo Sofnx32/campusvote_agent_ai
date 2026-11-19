@@ -11,6 +11,7 @@ La lógica se divide en módulos de responsabilidad única:
 from __future__ import annotations
 
 import time
+from typing import FrozenSet
 
 from ..config import settings
 from ..errors import AgentError
@@ -50,6 +51,7 @@ class OpenAICompatibleProvider(LLMProvider):
             "model": settings.llm_model,
             "messages": [{"role": "system", "content": system_prompt(context)}, *messages],
         }
+        tool_names: list[str] = []
         if allow_tools:
             tool_names = select_tool_names(context, messages, allow_tools)
             if tool_names:
@@ -68,14 +70,18 @@ class OpenAICompatibleProvider(LLMProvider):
             )
 
         budget_ends = time.monotonic() + settings.llm_total_budget_seconds
+        allowed = frozenset(tool_names) if tool_names else frozenset()
         try:
             return await self._attempts(
                 settings.llm_url, settings.llm_model, settings.llm_api_key, payload,
                 timeout=min(settings.llm_timeout_seconds, settings.llm_total_budget_seconds),
                 budget_ends=budget_ends, is_fallback=False, token_param=param,
+                allowed_tools=allowed,
             )
         except AgentError as error:
-            return await self._with_fallback(error, payload, param, budget_ends)
+            return await self._with_fallback(
+                error, payload, param, budget_ends, allowed_tools=allowed,
+            )
 
     async def _with_fallback(
         self,
@@ -83,6 +89,7 @@ class OpenAICompatibleProvider(LLMProvider):
         payload: dict,
         token_param: str,
         primary_budget_ends: float,
+        allowed_tools: FrozenSet[str],
     ) -> LLMResult:
         fallback = fallback_endpoint()
         if fallback is None:
@@ -117,11 +124,13 @@ class OpenAICompatibleProvider(LLMProvider):
             remaining_seconds=round(remaining, 2),
             fallback_budget_seconds=settings.llm_fallback_budget_seconds,
         )
+        # Fallback usa la misma allowlist (heredada del ciclo primario)
         return await self._attempts(
             url, model, api_key, {**payload, "model": model},
             timeout=min(settings.llm_timeout_seconds, settings.llm_fallback_budget_seconds),
             budget_ends=time.monotonic() + settings.llm_fallback_budget_seconds,
             is_fallback=True, token_param=token_param,
+            allowed_tools=allowed_tools,
         )
 
     async def _attempts(
@@ -135,8 +144,12 @@ class OpenAICompatibleProvider(LLMProvider):
         budget_ends: float,
         is_fallback: bool,
         token_param: str,
+        allowed_tools: FrozenSet[str],
     ) -> LLMResult:
-        """Reintentos acotados al cliente Python; nunca re-ejecuta tools."""
+        """Reintentos acotados al cliente Python; nunca re-ejecuta tools.
+
+        La allowlist inmutable se propaga a send_once -> parse_response.
+        """
         request_id = request_id_context.get()
         phase = "fallback" if is_fallback else "primary"
         metrics = current_metrics()
@@ -151,6 +164,7 @@ class OpenAICompatibleProvider(LLMProvider):
                     url, model, api_key, payload,
                     timeout=max(0.1, min(timeout, budget_ends - time.monotonic())),
                     output_token_param=token_param,
+                    allowed_tools=allowed_tools,
                 )
                 latency = (time.monotonic() - attempt_started) * 1000
                 if metrics:
