@@ -93,6 +93,7 @@ async def save_turn(
     tool_results: list[dict] | None = None,
     entities: dict[str, str] | None = None,
     pending_operation: dict | None = None,
+    pending_proposal: dict | None = None,
     confirmation_state: str = "none",
 ) -> None:
     """Guarda turno enriquecido en el almacén persistente y actualiza memoria."""
@@ -109,6 +110,7 @@ async def save_turn(
         tool_results,
         entities,
         pending_operation=pending_operation,
+        pending_proposal=pending_proposal,
         confirmation_state=confirmation_state,
     )
 
@@ -121,6 +123,7 @@ async def save_turn(
     memory.start_turn()
     memory.end_turn(user_message, assistant_message, tool_calls, tool_results, entities)
     memory.session.pending_operation = pending_operation
+    memory.session.pending_proposal = pending_proposal
     memory.session.confirmation_state = confirmation_state
 
 
@@ -155,6 +158,19 @@ async def lifespan(_app: FastAPI):
         max_messages=settings.conversation_max_messages,
         ttl_seconds=settings.conversation_ttl_seconds,
     )
+    # Log which backend is active
+    if conversation_store.redis:
+        # Mask password in URL if present
+        redis_url = settings.redis_url
+        if redis_url and "@" in redis_url:
+            # Format: redis://:password@host:port or redis://user:password@host:port
+            parts = redis_url.split("@")
+            masked = "redis://***@" + parts[-1]
+        else:
+            masked = redis_url
+        logger.info("conversation_store_backend_active backend=redis url=%s", masked)
+    else:
+        logger.warning("conversation_store_backend_active backend=memory_fallback reason=redis_not_configured")
     logger.info(
         "deadline_chain_validated requestId=- chain=%s",
         json.dumps(deadline_chain(), sort_keys=True),
@@ -236,12 +252,20 @@ async def health():
     # Check if conversation store (Redis) is initialized and responsive
     if conversation_store is None:
         raise HTTPException(status_code=503, detail={"success": False, "service": "campusvote-agent-python", "reason": "store_not_initialized"})
+    backend = "redis" if conversation_store.redis else "memory_fallback"
     if conversation_store.redis:
         try:
             await conversation_store.redis.ping()
         except Exception:
-            raise HTTPException(status_code=503, detail={"success": False, "service": "campusvote-agent-python", "reason": "redis_unavailable"})
-    return {"success": True, "service": "campusvote-agent-python"}
+            raise HTTPException(status_code=503, detail={"success": False, "service": "campusvote-agent-python", "reason": "redis_unavailable", "backend": backend})
+    # Mask password in URL if present
+    redis_url = settings.redis_url
+    if redis_url and "@" in redis_url:
+        parts = redis_url.split("@")
+        masked = "redis://***@" + parts[-1]
+    else:
+        masked = redis_url or "not_configured"
+    return {"success": True, "service": "campusvote-agent-python", "backend": backend, "redis_url": masked}
 
 
 def absolute_deadline(deadline_at: str) -> float:
@@ -341,6 +365,9 @@ async def chat(
             last_query_fresh=bool(turn_context.last_query and turn_context.last_query.get("fresh")),
             last_query_tool=turn_context.last_query.get("tool") if turn_context.last_query else None,
         )
+        
+        # Computar clave de conversación una vez para reutilizarla
+        key = conversation_key(payload.conversation_id, context)
         
         # C. Decision Layer
         stage_timers["decision_layer"] = StageTimer("decision_layer")
@@ -483,6 +510,9 @@ async def chat(
 
         # I. Persistencia y respuesta
         stage_timers["persistence"] = StageTimer("persistence")
+        # Obtener pending_proposal de la memoria si existe
+        memory = conversation_memories.get(key)
+        pending_proposal = memory.session.pending_proposal if memory else None
         await save_turn(
             payload.conversation_id,
             context,
@@ -492,6 +522,7 @@ async def chat(
             tool_results=tool_results_serializable,
             entities=entities if entities else None,
             pending_operation=pending_operation,
+            pending_proposal=pending_proposal,
             confirmation_state=confirmation_state,
         )
         log_conversation_turn_persisted(

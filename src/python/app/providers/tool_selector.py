@@ -61,6 +61,23 @@ _GENERAL_VOCAB: frozenset[str] = frozenset(
 )
 _GENERAL_MAX_WORDS = 4
 
+# Respuestas afirmativas cortas que indican confirmación a una oferta previa.
+_AFFIRMATIVE_UTTERANCES: frozenset[str] = frozenset({
+    "si", "sí", "si por favor", "sí por favor",
+    "claro", "claro que si", "claro que sí",
+    "dale", "dale pues",
+    "ok", "okey", "okey dokey",
+    "por supuesto", "por supesto",
+    "de acuerdo", "deacuerdo",
+    "adelante", "adelante pues",
+    "correcto", "exacto", "exactamente",
+    "esta bien", "está bien", "esta bien por favor", "está bien por favor",
+    "esa misma", "esa mismo",
+    "perfecto", "bien", "bien pues",
+    "va", "vamos", "vamos pues",
+    "sip", "si po", "si po favor",
+})
+
 
 def _strip_accents(text: str) -> str:
     decomposed = unicodedata.normalize("NFD", text)
@@ -82,6 +99,17 @@ def _is_plain_greeting(utterance: str) -> bool:
     if not words or len(words) > _GENERAL_MAX_WORDS:
         return False
     return all(word in _GENERAL_VOCAB for word in words)
+
+
+def _is_affirmative(utterance: str) -> bool:
+    return utterance in _AFFIRMATIVE_UTTERANCES
+
+
+def _has_selected_fair(context: dict) -> bool:
+    """Verifica si hay una feria seleccionada en el contexto de conversación."""
+    conv_ctx = context.get("conversation_context") or context.get("turn_context") or {}
+    selected = conv_ctx.get("selected") if isinstance(conv_ctx, dict) else {}
+    return isinstance(selected, dict) and "fair" in selected and isinstance(selected["fair"], dict) and selected["fair"].get("id")
 
 
 def _text(messages: list[dict]) -> str:
@@ -157,6 +185,7 @@ def select_tool_names(
     - ``allow_tools=False`` → lista vacía (el proveedor no envía ``tools``).
     - Conversación general inequívoca → lista vacía (respuesta directa).
     - Dominio reconocido → unión de ese dominio y herramientas del historial.
+    - Respuesta afirmativa con feria seleccionada → asegurar ``listFairCategories``.
     - Cualquier otra situación → las 23 herramientas del registro.
     """
     if not allow_tools:
@@ -167,7 +196,7 @@ def select_tool_names(
             content = candidate.get("content")
             if isinstance(content, str):
                 message = content
-            break
+                break
     if is_general_conversation(message, messages):
         return []
     combined = _normalize_utterance(_text(messages) + " " + (message or ""))
@@ -180,6 +209,11 @@ def select_tool_names(
                 matched = True
                 selected |= set(names)
                 break
+    # Si el usuario responde afirmativamente y hay una feria seleccionada,
+    # asegurar que listFairCategories esté disponible para listar categorías.
+    if not matched and _is_affirmative(_normalize_utterance(message)) and _has_selected_fair(context):
+        matched = True
+        selected.add("listFairCategories")
     # Sin dominio reconocido, la ambigüedad conserva las 23 herramientas;
     # el historial solo afina cuando además hay una intención de dominio clara.
     if not matched:

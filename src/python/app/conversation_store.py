@@ -32,7 +32,8 @@ local entities_json = ARGV[7]
 local timestamp = ARGV[8]
 local now = tonumber(ARGV[9])
 local pending_operation_json = ARGV[10]
-local confirmation_state = ARGV[11]
+local pending_proposal_json = ARGV[11]
+local confirmation_state = ARGV[12]
 
 -- Obtener historial actual
 local raw = redis.call('GET', key)
@@ -58,6 +59,7 @@ table.insert(messages, {
     tool_results = cjson.decode(tool_results_json),
     entities = cjson.decode(entities_json),
     pending_operation = cjson.decode(pending_operation_json),
+    pending_proposal = cjson.decode(pending_proposal_json),
     confirmation_state = confirmation_state,
     timestamp = timestamp,
     turn_index = turn_index
@@ -71,6 +73,7 @@ table.insert(messages, {
     tool_results = cjson.decode(tool_results_json),
     entities = cjson.decode(entities_json),
     pending_operation = cjson.decode(pending_operation_json),
+    pending_proposal = cjson.decode(pending_proposal_json),
     confirmation_state = confirmation_state,
     timestamp = timestamp,
     turn_index = turn_index
@@ -143,10 +146,11 @@ class ConversationStore:
     ) -> "ConversationStore":
         """Factory que respeta la configuración de entorno.
 
-        Si `redis_url` es `None` (no se pasó), se lee de variable de entorno.
+        Si `redis_url` es `None` (no se pasó), se lee de variable de entorno (via settings).
         Si `redis_url` es `""` (cadena vacía explícita), se fuerza modo memoria.
         """
-        redis_url = redis_url if redis_url is not None else os.getenv("REDIS_URL", "")
+        from .config import settings
+        redis_url = redis_url if redis_url is not None else settings.redis_url
         node_env = node_env or os.getenv("NODE_ENV", "development")
         allow_in_memory = (
             allow_in_memory
@@ -250,6 +254,7 @@ class ConversationStore:
         tool_results: list[dict] | None = None,
         entities: dict[str, str] | None = None,
         pending_operation: dict[str, Any] | None = None,
+        pending_proposal: dict[str, Any] | None = None,
         confirmation_state: str = "none",
     ) -> None:
         """Añade un turno completo (user + assistant) con metadatos enriquecidos.
@@ -268,6 +273,7 @@ class ConversationStore:
         tool_results_json = json.dumps(tool_results) if tool_results else "[]"
         entities_json = json.dumps(entities) if entities else "{}"
         pending_operation_json = json.dumps(pending_operation) if pending_operation else "{}"
+        pending_proposal_json = json.dumps(pending_proposal) if pending_proposal else "{}"
         if confirmation_state not in ("none", "awaiting_confirmation"):
             confirmation_state = "none"
 
@@ -288,7 +294,8 @@ class ConversationStore:
                     timestamp,                    # ARGV[8]
                     str(int(now)),                # ARGV[9]
                     pending_operation_json,       # ARGV[10]
-                    confirmation_state,           # ARGV[11]
+                    pending_proposal_json,        # ARGV[11]
+                    confirmation_state,           # ARGV[12]
                 )
                 return
             except Exception:
@@ -308,6 +315,7 @@ class ConversationStore:
                     timestamp,
                     str(int(now)),
                     pending_operation_json,
+                    pending_proposal_json,
                     confirmation_state,
                 )
                 return

@@ -147,6 +147,9 @@ class SessionContext:
     last_query_turn: int | None = None               # Turno en que se obtuvieron esos resultados
     pending_operation: dict[str, Any] | None = None  # {"tool": "createFair", "operation_id": "...", "version": 1}
     confirmation_state: str = "none"                 # "awaiting_confirmation" | "none"
+    # Pregunta/oferta pendiente del asistente para detectar respuestas afirmativas
+    # Ej: {"action": "configure_categories_rubrics", "fair_id": "f-123", "fair_name": "Feria X", "turn": 5}
+    pending_proposal: dict[str, Any] | None = None
 
     def update_from_tool_result(self, tool_name: str, result: dict) -> None:
         """Actualiza el contexto basado en el resultado de una herramienta."""
@@ -344,6 +347,24 @@ class ConversationMemory:
             name, candidate_id = candidate_match.groups()
             self.session.select_entity("candidate", {"id": candidate_id, "name": name.strip()})
             self.mentions.record_mention("candidate", candidate_id, self._current_turn)
+
+        # Detectar oferta del asistente para configurar categorías/rúbricas
+        # Patrones: "¿deseas configurar las categorías y rúbricas de la Feria X...?"
+        offer_match = re.search(
+            r"(?:deseas?|quieres?)\s+(?:configurar|crear|gestionar)\s+(?:las\s+)?(?:categor[ií]as|rubricas?)\s+(?:de\s+la\s+)?feria\s+['\"]?([^'\"]+?)['\"]?",
+            assistant_message,
+            re.IGNORECASE
+        )
+        if offer_match and self.session.selected_fair:
+            fair_name = offer_match.group(1)
+            # Verificar que coincide con la feria seleccionada
+            if fair_name.lower() in self.session.selected_fair.get("name", "").lower():
+                self.session.pending_proposal = {
+                    "action": "configure_categories_rubrics",
+                    "fair_id": self.session.selected_fair.get("id"),
+                    "fair_name": self.session.selected_fair.get("name"),
+                    "turn": self._current_turn,
+                }
 
     def resolve_reference(self, user_message: str) -> dict[str, Any] | None:
         """Resuelve referencias anafóricas/ordinales en el mensaje del usuario.
@@ -673,6 +694,7 @@ class ConversationMemory:
                 "last_query_results": self.session.last_query_results,
                 "last_query_turn": self.session.last_query_turn,
                 "pending_operation": self.session.pending_operation,
+                "pending_proposal": self.session.pending_proposal,
                 "confirmation_state": self.session.confirmation_state,
             },
             "mentions": self.mentions._index,
@@ -694,6 +716,7 @@ class ConversationMemory:
         mem.session.last_query_results = session_data.get("last_query_results")
         mem.session.last_query_turn = session_data.get("last_query_turn")
         mem.session.pending_operation = session_data.get("pending_operation")
+        mem.session.pending_proposal = session_data.get("pending_proposal")
         mem.session.confirmation_state = session_data.get("confirmation_state", "none")
         mem.mentions._index = data.get("mentions", {})
         return mem
@@ -725,6 +748,9 @@ class ConversationMemory:
                 mem.session.confirmation_state = (
                     state if pending and state in ("none", "awaiting_confirmation") else "none"
                 )
+            if "pending_proposal" in msg:
+                proposal = msg.get("pending_proposal")
+                mem.session.pending_proposal = proposal if isinstance(proposal, dict) and proposal else None
 
             if role == "user":
                 # Extraer entidades mencionadas explícitamente en el mensaje del usuario

@@ -449,7 +449,7 @@ class FakeStore:
     async def get_full_history(self, key):
         return self.data.get(key, [])
 
-    async def append_turn(self, key, user_message, assistant_message, tool_calls=None, tool_results=None, entities=None, pending_operation=None, confirmation_state="none"):
+    async def append_turn(self, key, user_message, assistant_message, tool_calls=None, tool_results=None, entities=None, pending_operation=None, pending_proposal=None, confirmation_state="none"):
         if key not in self.data:
             self.data[key] = []
         turn_index = len([m for m in self.data[key] if m.get("role") == "user"])
@@ -457,12 +457,14 @@ class FakeStore:
             "role": "user", "content": user_message,
             "tool_calls": tool_calls, "tool_results": tool_results,
             "entities": entities, "pending_operation": pending_operation,
+            "pending_proposal": pending_proposal,
             "confirmation_state": confirmation_state, "turn_index": turn_index,
         })
         self.data[key].append({
             "role": "assistant", "content": assistant_message,
             "tool_calls": tool_calls, "tool_results": tool_results,
             "entities": entities, "pending_operation": pending_operation,
+            "pending_proposal": pending_proposal,
             "confirmation_state": confirmation_state, "turn_index": turn_index,
         })
 

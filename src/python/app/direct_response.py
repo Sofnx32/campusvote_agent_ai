@@ -55,6 +55,24 @@ class DirectResponse:
 # --- Patrones y utilidades ----------------------------------------------------
 
 
+# Respuestas afirmativas cortas (sin verbo operativo) que indican confirmación
+# a una pregunta/propuesta previa del asistente.
+_AFFIRMATIVE_UTTERANCES = frozenset({
+    "si", "sí", "si por favor", "sí por favor",
+    "claro", "claro que si", "claro que sí",
+    "dale", "dale pues",
+    "ok", "okey", "okey dokey",
+    "por supuesto", "por supesto",
+    "de acuerdo", "deacuerdo",
+    "adelante", "adelante pues",
+    "correcto", "exacto", "exactamente",
+    "esta bien", "está bien", "esta bien por favor", "está bien por favor",
+    "esa misma", "esa mismo",
+    "perfecto", "bien", "bien pues",
+    "va", "vamos", "vamos pues",
+    "sip", "si po", "si po favor",
+})
+
 # Saludos/despedidas/agradecimientos inequívocos (solo estos, sin añadidos)
 # Se comparan como frases completas normalizadas (sin acentos, minúsculas, sin puntuación)
 _GREETING_PATTERNS = frozenset({
@@ -69,6 +87,12 @@ _THANKS_PATTERNS = frozenset({
 _ACK_PATTERNS = frozenset({
     "vale", "ok", "entendido", "de acuerdo", "perfecto", "bien", "correcto",
 })
+
+
+def _is_affirmative(message: str) -> bool:
+    """Detecta si el mensaje es una respuesta afirmativa corta."""
+    norm = _normalize(message)
+    return norm in _AFFIRMATIVE_UTTERANCES
 
 
 # Preguntas sobre historial/contexto (requieren evidencia en memoria)
@@ -264,6 +288,21 @@ def direct_response(
     NUNCA invoca LLM, herramientas, Redis ni muta estado.
     """
     norm = _normalize(message)
+
+    # 0. Respuesta afirmativa a una propuesta/pregunta del asistente (ej: "si por favor")
+    # Si hay feria seleccionada, delegar al agente para que llame a listFairCategories.
+    # NO responder directamente (ANSWERED) porque necesitamos que el agente ejecute la herramienta.
+    if _is_affirmative(message) and memory and memory.session.selected_fair:
+        # Delegar al agente: el decision_layer ya clasificó esto como OPERATION_REQUEST
+        # y el tool_selector incluye listFairCategories gracias a la feria seleccionada.
+        log_direct_response_evaluated(
+            direct_response_state=None,
+            direct_response_reason="delegated_to_agent_affirmative_fair",
+            direct_response_source="turn_context_selected_fair",
+            llm_skipped=False,
+            tool_execution_skipped=False,
+        )
+        return None
 
     # 1. Saludos/despedidas/agradecimientos/acks puros → ANSWERED
     if _is_pure_greeting(message):

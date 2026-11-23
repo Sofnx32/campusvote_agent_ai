@@ -76,6 +76,8 @@ class Settings:
     conversation_max_messages: int = field(default_factory=lambda: int(os.getenv("AI_CONVERSATION_MAX_MESSAGES", "20")))
     conversation_ttl_seconds: int = field(default_factory=lambda: int(os.getenv("AI_CONVERSATION_TTL_SECONDS", "1800")))
     max_history_messages: int = field(default_factory=lambda: int(os.getenv("AI_MAX_HISTORY_MESSAGES", "12")))
+    # Redis URL for conversation store (e.g., redis://red-dblm08ff3r2c73e18o6g:6379)
+    redis_url: str = field(default_factory=lambda: os.getenv("REDIS_URL", ""))
 
     def public_key(self) -> str:
         if self.context_public_key:

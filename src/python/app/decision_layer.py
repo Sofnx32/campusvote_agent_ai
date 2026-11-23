@@ -115,6 +115,8 @@ _GENERAL_UTTERANCES = frozenset({
     "muchas gracias", "adios", "hasta luego", "vale", "ok", "entendido",
     "quien eres", "que eres", "que puedes hacer", "que sabes hacer",
     "como funciona", "ayuda", "help", "cual es tu nombre", "como te llamas",
+    # Respuestas afirmativas cortas (sin feria seleccionada se tratan como general)
+    "si", "sí", "si por favor", "sí por favor", "claro", "dale", "ok", "por supuesto", "esa misma",
 })
 _GENERAL_PREFIX_RE = re.compile(
     r"^(hola|buenos dias|buenas tardes|buenas noches|hey|hi|hello|que tal|"
@@ -207,6 +209,24 @@ _OP_VERBS = frozenset({
     "ejecutar", "ejecuta", "ejecutan", "ejecuto", "ejecutare", "ejecutado",
 })
 
+# Respuestas afirmativas cortas (sin verbo operativo) que indican confirmación
+# a una pregunta/propuesta previa del asistente.
+_AFFIRMATIVE_UTTERANCES = frozenset({
+    "si", "sí", "si por favor", "sí por favor",
+    "claro", "claro que si", "claro que sí",
+    "dale", "dale pues",
+    "ok", "okey", "okey dokey",
+    "por supuesto", "por supesto",
+    "de acuerdo", "deacuerdo",
+    "adelante", "adelante pues",
+    "correcto", "exacto", "exactamente",
+    "esta bien", "está bien", "esta bien por favor", "está bien por favor",
+    "esa misma", "esa mismo",
+    "perfecto", "bien", "bien pues",
+    "va", "vamos", "vamos pues",
+    "sip", "si po", "si po favor",
+})
+
 _EXPLANATORY_RE = re.compile(
     r"\bcomo (se |puedo |podria |podrias |hago |hacer |creo |crea |edito |"
     r"edita |elimino |elimina |cambio |cambia |configuro |funciona |se hace)\b"
@@ -236,6 +256,10 @@ _CONFLICT_GROUPS = (
 
 def _is_general(norm: str) -> bool:
     return norm in _GENERAL_UTTERANCES or bool(_GENERAL_PREFIX_RE.match(norm))
+
+
+def _is_affirmative(norm: str) -> bool:
+    return norm in _AFFIRMATIVE_UTTERANCES
 
 
 def _has_anaphora(norm: str) -> bool:
@@ -283,6 +307,7 @@ def decide(
     has_business = bool(entity_types) or has_fresh
     has_anaphora = _has_anaphora(norm)
     is_general = _is_general(norm)
+    is_affirmative = _is_affirmative(norm)
     is_history = bool(_HISTORY_RE.search(norm))
     has_op_verb = bool(words & _OP_VERBS)
     has_explanatory = bool(_EXPLANATORY_RE.search(norm))
@@ -291,6 +316,9 @@ def decide(
         or (bool(ordered_words) and ordered_words[0] in _OP_VERBS)
     )
     contradictory_ops = _has_conflicting_operations(words)
+
+    # ¿Hay una feria seleccionada en el contexto? (para detectar confirmación de oferta)
+    has_selected_fair = "fair" in turn_context.selected
 
     def build(
         category: DecisionCategory,
@@ -337,6 +365,11 @@ def decide(
             DecisionCategory.UNKNOWN, "contradictory_signals",
             allow_tools=False, ambiguous=True, clarification=True,
         )
+
+    # 1.5) Respuesta afirmativa corta a una oferta/pregunta del asistente (ej: "si por favor")
+    # Si hay una feria seleccionada en contexto, tratar como solicitud de operación implícita
+    if is_affirmative and has_selected_fair:
+        return build(DecisionCategory.OPERATION_REQUEST, "affirmative_to_pending_offer", allow_tools=True)
 
     # 2) conversación general: nunca herramientas de negocio por defecto.
     if is_general:

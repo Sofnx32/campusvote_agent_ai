@@ -415,14 +415,33 @@ def test_30_operation_request_preserves_proposal_flow():
     assert decision.allow_tools is True  # Node valida y confirma
 
 
-def test_31_tool_selector_returns_empty_when_allow_tools_false():
-    """10. tool_selector.py devuelve [] cuando allow_tools=False."""
+def test_31_affirmative_to_pending_offer_with_selected_fair():
+    """10. Respuesta afirmativa corta con feria seleccionada → OPERATION_REQUEST."""
+    ctx = _ctx(selected={"fair": {"id": "f-1", "name": "Feria Cultura"}})
+    for msg in ["si", "sí", "si por favor", "sí por favor", "claro", "dale", "ok", "por supuesto", "esa misma"]:
+        decision = decide(msg, ctx)
+        assert decision.category == DecisionCategory.OPERATION_REQUEST, f"falló para: {msg}"
+        assert decision.reason == "affirmative_to_pending_offer", f"reason={decision.reason} para: {msg}"
+        assert decision.allow_tools is True
+
+
+def test_32_affirmative_without_selected_fair_is_general():
+    """11. Respuesta afirmativa SIN feria seleccionada → GENERAL_QUESTION (no inventa)."""
+    ctx = _ctx()  # sin feria seleccionada
+    for msg in ["si", "si por favor", "claro"]:
+        decision = decide(msg, ctx)
+        assert decision.category == DecisionCategory.GENERAL_QUESTION, f"falló para: {msg}"
+        assert decision.allow_tools is False
+
+
+def test_33_tool_selector_returns_empty_when_allow_tools_false():
+    """13. tool_selector.py devuelve [] cuando allow_tools=False."""
     from app.providers.tool_selector import select_tool_names
     assert select_tool_names({}, [{"role": "user", "content": "ferias"}], allow_tools=False) == []
 
 
-def test_32_provider_receives_no_schemas_when_decision_disables_tools():
-    """11. Proveedor LLM no recibe schemas cuando la decisión deshabilita herramientas."""
+def test_34_provider_receives_no_schemas_when_decision_disables_tools():
+    """14. Proveedor LLM no recibe schemas cuando la decisión deshabilita herramientas."""
     from types import SimpleNamespace
     import asyncio
     from app.agent import run_agent_turn
@@ -456,8 +475,8 @@ def test_32_provider_receives_no_schemas_when_decision_disables_tools():
     assert captured[0]["has_tools"] is False
 
 
-def test_33_max_tool_calls_limit_still_works():
-    """12. Límite max_tool_calls sigue funcionando."""
+def test_35_max_tool_calls_limit_still_works():
+    """15. Límite max_tool_calls sigue funcionando."""
     import asyncio
     from app.agent import run_agent_turn
     from app.models import LLMResult, ToolCall
@@ -499,8 +518,8 @@ def test_33_max_tool_calls_limit_still_works():
     assert len(executed) == 1  # solo 1 ejecución aunque el LLM pidió 2
 
 
-def test_34_historical_callers_still_work_no_regression():
-    """13. Llamadores históricos sin decision kwarg siguen funcionando."""
+def test_36_historical_callers_still_work_no_regression():
+    """16. Llamadores históricos sin decision kwarg siguen funcionando."""
     from types import SimpleNamespace
     import asyncio
     from app.agent import run_agent_turn
@@ -526,8 +545,8 @@ def test_34_historical_callers_still_work_no_regression():
     assert current.content == "ok"
 
 
-def test_35_no_additional_llm_call_for_classification():
-    """14. No se agrega ninguna llamada LLM adicional para clasificar intención."""
+def test_37_no_additional_llm_call_for_classification():
+    """17. No se agrega ninguna llamada LLM adicional para clasificar intención."""
     # decide() es síncrona y pura; no hay imports de llm ni async.
     # Verificación estática: decision_layer no importa app.llm ni app.providers.*
     import app.decision_layer as dl

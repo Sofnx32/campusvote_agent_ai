@@ -2,11 +2,38 @@ import crypto from 'node:crypto';
 import { AgentError } from '../errors.js';
 
 export const isFairConfirmation = (message) => /\b(confirmo|confirmar|sí confirmo|si confirmo|adelante)\b/i.test(message);
+
+const AFFIRMATIVE_PATTERNS = [
+  // Sí / Si (con y sin tilde, con y sin "por favor", con y sin coma)
+  /^s[ií](?:\s*,?\s*por\s+favor)?[.!]?$/i,
+  // Ok / Okay
+  /^ok(ay)?[.!]?$/i,
+  // Dale / Va
+  /^dale[.!]?$/i,
+  /^va[.!]?$/i,
+  // De acuerdo
+  /^de\s+acuerdo[.!]?$/i,
+  // Confirmo / Confirmar / Adelante / Procede / Hazlo
+  /^(confirmo|confirmar|adelante|procede|hazlo)[.!]?$/i,
+  // Correcto / Exacto / Está bien / Así es
+  /^(correcto|exacto|est[aá]\s+bien|as[ií]\s+es)[.!]?$/i,
+  // Claro / Por supuesto / Por fii
+  /^claro[.!]?$/i,
+  /^por\s+supuesto[.!]?$/i,
+  /^por\s+fii[.!]?$/i,
+  // Esa misma / Esa
+  /^esa\s+mism?[ae][.!]?$/i,
+  /^esa[.!]?$/i,
+  // Perfecto / Bien / De una / Vamos
+  /^(perfecto|bien|de\s+una|vamos)[.!]?$/i,
+];
+
 export const isExplicitAffirmation = (message) => {
   const text = String(message || '').trim().toLowerCase();
-  if (!text || text.length > 40 || text.includes('?')) return false;
-  return /^(s[ií]|ok(ay)?|dale|de acuerdo|confirmo|confirmar|adelante|procede|hazlo|correcto|exacto|est[aá] bien|as[ií] es)(?:[\s,]+(?:por favor|gracias|confirmo|confirmar|adelante|s[ií]|si|de acuerdo|hazlo|procede))*(?:[.!]*)$/i.test(text);
+  if (!text || text.length > 60 || text.includes('?')) return false;
+  return AFFIRMATIVE_PATTERNS.some(p => p.test(text));
 };
+
 export const isFairCancellation = (message) => /\b(cancelar|cancela|no crear|olvídalo|olvidalo)\b/i.test(message);
 export const isFairResume = (message) => /\b(continuar|retomar|ver resumen|revisar propuesta)\b/i.test(message);
 const allowedFields = new Set(['name', 'description', 'image_url', 'starts_at', 'ends_at', 'registration_deadline']);
