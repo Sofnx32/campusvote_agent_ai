@@ -9,6 +9,7 @@ TOOLS = [
     "listFairCategories", "listFairCategoryRubrics",
     "createFairRubric", "addFairRubricCriterion",
     "createCategoryFairRubric", "addCategoryFairRubricCriterion",
+    "createFairCategory", "updateFairCategory", "deleteFairCategory",
     "createFair", "updateFair", "changeFairStatus",
     "listFairStands", "createFairStand", "updateFairStand", "deleteFairStand",
 ]

@@ -117,6 +117,9 @@ const GENERIC_COPY = {
   addFairRubricCriterion: { title: 'Criterio agregado a la rúbrica', description: 'El criterio se sumó a la rúbrica de la feria.' },
   createCategoryFairRubric: { title: 'Rúbrica por categoría creada', description: 'La categoría ya cuenta con su rúbrica.' },
   addCategoryFairRubricCriterion: { title: 'Criterio agregado a la categoría', description: 'El criterio se sumó a la rúbrica de la categoría.' },
+  createFairCategory: { title: 'Categoría creada', description: 'La categoría quedó registrada en la feria (estado DRAFT).' },
+  updateFairCategory: { title: 'Categoría actualizada', description: 'Los cambios de la categoría se guardaron correctamente.' },
+  deleteFairCategory: { title: 'Categoría eliminada', description: 'La categoría se retiró de la feria.' },
   createTeachingCriterion: { title: 'Criterio docente creado', description: 'El criterio de evaluación docente quedó registrado.' },
   updateTeachingCriterion: { title: 'Criterio docente actualizado', description: 'Los cambios del criterio se guardaron correctamente.' },
   toggleTeachingCriterion: { title: 'Estado del criterio actualizado', description: 'El criterio docente cambió de estado.' },
@@ -124,13 +127,17 @@ const GENERIC_COPY = {
 };
 
 const GENERIC_FIELDS = {
-  stand: ['code', 'description'], rubric: ['name', 'description', 'min_score', 'max_score', 'position'],
-  points: ['name', 'description', 'points', 'position'], teaching: ['name', 'description'],
+  stand: ['code', 'description'],
+  rubric: ['name', 'description', 'min_score', 'max_score', 'position'],
+  points: ['name', 'description', 'points', 'position'],
+  teaching: ['name', 'description'],
+  category: ['name', 'description'],
 };
 
 const genericFieldNames = (tool) => {
   if (tool === 'createFairStand' || tool === 'updateFairStand' || tool === 'deleteFairStand') return GENERIC_FIELDS.stand;
   if (tool === 'addFairRubricCriterion' || tool === 'addCategoryFairRubricCriterion') return GENERIC_FIELDS.points;
+  if (tool === 'createFairCategory' || tool === 'updateFairCategory' || tool === 'deleteFairCategory') return GENERIC_FIELDS.category;
   if (tool?.startsWith('createTeaching') || tool?.startsWith('updateTeaching') || tool?.startsWith('toggleTeaching') || tool?.startsWith('deleteTeaching')) return GENERIC_FIELDS.teaching;
   return GENERIC_FIELDS.rubric;
 };

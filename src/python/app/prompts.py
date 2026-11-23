@@ -1,5 +1,17 @@
 from __future__ import annotations
 
+import os
+from pathlib import Path
+
+
+def _load_category_rubric_prompt() -> str:
+    """Carga el prompt específico de categorías y rúbricas desde archivo Markdown."""
+    prompt_path = Path(__file__).parent / "prompts" / "category_rubric_prompt.md"
+    try:
+        return prompt_path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return ""
+
 
 def site_instructions(context: dict) -> str:
     parts = [
@@ -174,6 +186,9 @@ def system_prompt(context: dict) -> str:
         "a las herramientas existentes. No inventes herramientas, parámetros "
         "ni capacidades. Respeta los permisos, contratos y validaciones "
         "de la arquitectura de CampusVote.\n\n"
+
+        "--- REGLAS ESPECÍFICAS CATEGORÍAS Y RÚBRICAS ---\n"
+        f"{_load_category_rubric_prompt()}\n\n"
 
         f"{site_instructions(context)}"
     )

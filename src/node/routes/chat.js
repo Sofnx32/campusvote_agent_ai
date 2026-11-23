@@ -5,6 +5,7 @@ import { extractBearer, verifyUser, validateActor, signContext } from '../utils/
 import { readJsonResponse } from '../utils/http-response.js';
 import { fairActionScopeKey, operationDigest, isExplicitAffirmation, isFairCancellation, isFairConfirmation, isFairResume, validateWriteProposal } from '../validators/fair-action.js';
 import { buildOperationResult, buildFairListView } from '../views/result-view.js';
+import { formatCategoriesSummary, formatRubricDetail, formatRubricSummary } from '../views/category-rubric-view.js';
 import {
   withTimeout, operationTitles, pendingActionUi, warnIfTokenNearExpiry,
   getOrCreateAdminSession, chatEnvelope,
@@ -64,11 +65,39 @@ function applyFairListViews(response) {
   const lastTool = response.meta?.last_tool;
   if (!LIST_TOOLS.has(lastTool) || response.ui?.type !== 'message') return;
   const toolData = response.meta?.tool_data;
-  if (toolData && Array.isArray(toolData)) {
-    const view = buildFairListView({ fairs: toolData, tool: lastTool, totalCount: toolData.length });
-    response.message.content = view.message;
-    response.ui = view.ui;
+  if (!toolData || !Array.isArray(toolData)) return;
+
+  // Categorías de feria
+  if (lastTool === 'listFairCategories') {
+    const fairName = response.meta?.fair_name || 'la feria';
+    const message = formatCategoriesSummary(fairName, toolData);
+    response.message.content = message;
+    response.ui = { type: 'message', schema: null, data: toolData, actions: [] };
+    return;
   }
+
+  // Rúbricas por categoría
+  if (lastTool === 'listFairCategoryRubrics') {
+    const fairName = response.meta?.fair_name || 'la feria';
+    // listFairCategoryRubrics devuelve array de categorías con sus rúbricas
+    const lines = toolData.map((cat, index) => {
+      const rubricBadge = cat.rubrics?.length ? '✅ Con rúbrica' : '⚠️ Sin rúbrica';
+      const rubricDetails = cat.rubrics?.map(r => formatRubricSummary(r)).join('\n') || '  _Sin rúbrica_';
+      return `${index + 1}. **${cat.name}** (${rubricBadge})\n${rubricDetails}`;
+    });
+    const message = [
+      `### Rúbricas por categoría en ${fairName} (${toolData.length})`,
+      ...lines,
+    ].join('\n\n');
+    response.message.content = message;
+    response.ui = { type: 'message', schema: null, data: toolData, actions: [] };
+    return;
+  }
+
+  // Resto de listados (ferias, proyectos, stands, resultados, criterios docentes, stands de feria)
+  const view = buildFairListView({ fairs: toolData, tool: lastTool, totalCount: toolData.length });
+  response.message.content = view.message;
+  response.ui = view.ui;
 }
 
 export function registerChatRoutes(app, replay, backend, adminSessions) {
