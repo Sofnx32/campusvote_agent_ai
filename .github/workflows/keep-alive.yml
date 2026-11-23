@@ -9,12 +9,14 @@ jobs:
   ping-services:
     runs-on: ubuntu-latest
     steps:
-      - name: Wake up CampusVote Agent Node
-        run: |
-          curl --fail --silent --show-error --max-time 60 \
-            "https://campusvote-agent-node.onrender.com/health/agent"
-
       - name: Wake up CampusVote Agent Python & Redis
         run: |
           curl --fail --silent --show-error --max-time 60 \
+            --retry 6 --retry-delay 10 --retry-all-errors \
             "https://campusvote-agent-ai.onrender.com/health"
+
+      - name: Wake up CampusVote Agent Node
+        run: |
+          curl --fail --silent --show-error --max-time 60 \
+            --retry 6 --retry-delay 10 --retry-all-errors \
+            "https://campusvote-agent-node.onrender.com/health/agent"
