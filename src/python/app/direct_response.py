@@ -23,6 +23,7 @@ from typing import Any
 
 from .conversation_memory import ConversationMemory, TurnContext, ResolvedReference
 from .decision_layer import Decision, DecisionCategory
+from .forensic import log_direct_response_evaluated, log_direct_response_used
 
 
 class DirectResponseState(str, Enum):
@@ -268,30 +269,64 @@ def direct_response(
     if _is_pure_greeting(message):
         # Solo si la decisión coincide (GENERAL_QUESTION sin herramientas)
         if decision.category == DecisionCategory.GENERAL_QUESTION and not decision.allow_tools:
-            return DirectResponse(
+            resp = DirectResponse(
                 state=DirectResponseState.ANSWERED,
                 text=_greeting_response(message),
                 reason="pure_greeting",
                 source="deterministic_pattern",
             )
+            log_direct_response_evaluated(
+                direct_response_state=resp.state.value,
+                direct_response_reason=resp.reason,
+                direct_response_source=resp.source,
+                llm_skipped=True,
+                tool_execution_skipped=True,
+            )
+            log_direct_response_used(
+                direct_response_state=resp.state.value,
+                direct_response_reason=resp.reason,
+                direct_response_source=resp.source,
+            )
+            return resp
         # Si tiene allow_tools o no es GENERAL_QUESTION, delegar (puede ser "hola, crea feria")
 
     # 2. Preguntas sobre historial/contexto general → ANSWERED si hay evidencia
     if _match_any(_HISTORY_QUESTION_PATTERNS, norm):
         response = _history_context_response(turn_context, memory)
         if response:
-            return DirectResponse(
+            resp = DirectResponse(
                 state=DirectResponseState.ANSWERED,
                 text=response,
                 reason="history_context_available",
                 source="turn_context_and_memory",
             )
-        return DirectResponse(
+            log_direct_response_evaluated(
+                direct_response_state=resp.state.value,
+                direct_response_reason=resp.reason,
+                direct_response_source=resp.source,
+                llm_skipped=True,
+                tool_execution_skipped=True,
+            )
+            log_direct_response_used(
+                direct_response_state=resp.state.value,
+                direct_response_reason=resp.reason,
+                direct_response_source=resp.source,
+            )
+            return resp
+        resp = DirectResponse(
             state=DirectResponseState.NOT_ANSWERABLE,
             text="",
             reason="history_context_insufficient",
             source="turn_context_and_memory",
         )
+        log_direct_response_evaluated(
+            direct_response_state=resp.state.value,
+            direct_response_reason=resp.reason,
+            direct_response_source=resp.source,
+            llm_skipped=False,
+            tool_execution_skipped=False,
+        )
+        return resp
 
     # 3. Preguntas sobre entidad seleccionada/resuelta específica → ANSWERED si hay nombre
     if _match_any(_CONTEXT_QUESTION_PATTERNS, norm):
@@ -309,80 +344,162 @@ def direct_response(
         if entity_type:
             response = _context_entity_response(turn_context, entity_type)
             if response:
-                return DirectResponse(
+                resp = DirectResponse(
                     state=DirectResponseState.ANSWERED,
                     text=response,
                     reason="selected_entity_resolved",
                     source="turn_context_selected_or_resolved",
                 )
+                log_direct_response_evaluated(
+                    direct_response_state=resp.state.value,
+                    direct_response_reason=resp.reason,
+                    direct_response_source=resp.source,
+                    llm_skipped=True,
+                    tool_execution_skipped=True,
+                )
+                log_direct_response_used(
+                    direct_response_state=resp.state.value,
+                    direct_response_reason=resp.reason,
+                    direct_response_source=resp.source,
+                )
+                return resp
             # Si hay ID pero no nombre → NO inventar
             selected = turn_context.selected.get(entity_type)
             resolved = [r for r in turn_context.resolved if r.type == entity_type]
             if (selected and selected.get("id")) or (resolved and resolved[0].id):
-                return DirectResponse(
+                resp = DirectResponse(
                     state=DirectResponseState.NOT_ANSWERABLE,
                     text="",
                     reason="entity_id_only_no_descriptive_data",
                     source="turn_context_selected_or_resolved",
                 )
-        return DirectResponse(
+                log_direct_response_evaluated(
+                    direct_response_state=resp.state.value,
+                    direct_response_reason=resp.reason,
+                    direct_response_source=resp.source,
+                    llm_skipped=False,
+                    tool_execution_skipped=False,
+                )
+                return resp
+        resp = DirectResponse(
             state=DirectResponseState.NOT_ANSWERABLE,
             text="",
             reason="context_entity_insufficient",
             source="turn_context",
         )
+        log_direct_response_evaluated(
+            direct_response_state=resp.state.value,
+            direct_response_reason=resp.reason,
+            direct_response_source=resp.source,
+            llm_skipped=False,
+            tool_execution_skipped=False,
+        )
+        return resp
 
     # 4. Preguntas sobre confirmación pendiente → ANSWERED (informativo)
     if _match_any(_CONFIRMATION_QUESTION_PATTERNS, norm):
         response = _confirmation_status_response(turn_context)
         if response:
-            return DirectResponse(
+            resp = DirectResponse(
                 state=DirectResponseState.ANSWERED,
                 text=response,
                 reason="confirmation_status_informational",
                 source="turn_context_confirmation",
             )
-        return DirectResponse(
+            log_direct_response_evaluated(
+                direct_response_state=resp.state.value,
+                direct_response_reason=resp.reason,
+                direct_response_source=resp.source,
+                llm_skipped=True,
+                tool_execution_skipped=True,
+            )
+            log_direct_response_used(
+                direct_response_state=resp.state.value,
+                direct_response_reason=resp.reason,
+                direct_response_source=resp.source,
+            )
+            return resp
+        resp = DirectResponse(
             state=DirectResponseState.NOT_ANSWERABLE,
             text="",
             reason="no_pending_confirmation",
             source="turn_context_confirmation",
         )
+        log_direct_response_evaluated(
+            direct_response_state=resp.state.value,
+            direct_response_reason=resp.reason,
+            direct_response_source=resp.source,
+            llm_skipped=False,
+            tool_execution_skipped=False,
+        )
+        return resp
 
     # 5. Referencia ambigua en TurnContext → AMBIGUOUS
     if turn_context.ambiguous:
-        return DirectResponse(
+        resp = DirectResponse(
             state=DirectResponseState.AMBIGUOUS,
             text="",
             reason="ambiguous_reference_in_context",
             source="turn_context_ambiguous",
         )
+        log_direct_response_evaluated(
+            direct_response_state=resp.state.value,
+            direct_response_reason=resp.reason,
+            direct_response_source=resp.source,
+            llm_skipped=False,
+            tool_execution_skipped=False,
+        )
+        return resp
 
     # 6. Referencias no resueltas en TurnContext → NOT_ANSWERABLE
     if turn_context.unresolved:
-        return DirectResponse(
+        resp = DirectResponse(
             state=DirectResponseState.NOT_ANSWERABLE,
             text="",
             reason="unresolved_reference_in_context",
             source="turn_context_unresolved",
         )
+        log_direct_response_evaluated(
+            direct_response_state=resp.state.value,
+            direct_response_reason=resp.reason,
+            direct_response_source=resp.source,
+            llm_skipped=False,
+            tool_execution_skipped=False,
+        )
+        return resp
 
     # 7. Resultado obsoleto (fresh=False) consultado como si fuera actual → NOT_ANSWERABLE
     if turn_context.last_query and not turn_context.last_query.get("fresh"):
         # Si la pregunta parece pedir datos actuales
         if any(w in norm for w in ("actual", "ahora", "hoy", "estado", "como esta", "como estan")):
-            return DirectResponse(
+            resp = DirectResponse(
                 state=DirectResponseState.NOT_ANSWERABLE,
                 text="",
                 reason="stale_results_require_fresh_data",
                 source="turn_context_last_query",
             )
+            log_direct_response_evaluated(
+                direct_response_state=resp.state.value,
+                direct_response_reason=resp.reason,
+                direct_response_source=resp.source,
+                llm_skipped=False,
+                tool_execution_skipped=False,
+            )
+            return resp
 
     # 8. Operaciones de escritura, búsquedas de negocio, datos actuales → delegar
     if decision.category in (
         DecisionCategory.BUSINESS_QUERY,
         DecisionCategory.OPERATION_REQUEST,
     ):
+        resp = None
+        log_direct_response_evaluated(
+            direct_response_state=None,
+            direct_response_reason="delegated_to_agent",
+            direct_response_source="decision_layer",
+            llm_skipped=False,
+            tool_execution_skipped=False,
+        )
         return None
 
     # 9. AMBIGUOUS_REQUEST o UNKNOWN con allow_tools=False (fail-closed) → delegar al agente
@@ -390,26 +507,62 @@ def direct_response(
         DecisionCategory.AMBIGUOUS_REQUEST,
         DecisionCategory.UNKNOWN,
     ):
+        log_direct_response_evaluated(
+            direct_response_state=None,
+            direct_response_reason="delegated_to_agent",
+            direct_response_source="decision_layer",
+            llm_skipped=False,
+            tool_execution_skipped=False,
+        )
         return None
 
     # 10. HISTORY_QUERY sin evidencia ya capturado arriba; GENERAL_QUESTION sin ser saludo puro
     if decision.category == DecisionCategory.HISTORY_QUERY:
+        log_direct_response_evaluated(
+            direct_response_state=None,
+            direct_response_reason="delegated_to_agent",
+            direct_response_source="decision_layer",
+            llm_skipped=False,
+            tool_execution_skipped=False,
+        )
         return None
 
     if decision.category == DecisionCategory.GENERAL_QUESTION:
         # Preguntas de conocimiento general que no son saludos puros → delegar
+        log_direct_response_evaluated(
+            direct_response_state=None,
+            direct_response_reason="delegated_to_agent",
+            direct_response_source="decision_layer",
+            llm_skipped=False,
+            tool_execution_skipped=False,
+        )
         return None
 
     # 11. CONTEXTUAL_QUERY sin entidad resuelta/seleccionada con nombre → NOT_ANSWERABLE
     if decision.category == DecisionCategory.CONTEXTUAL_QUERY:
-        return DirectResponse(
+        resp = DirectResponse(
             state=DirectResponseState.NOT_ANSWERABLE,
             text="",
             reason="contextual_query_insufficient_evidence",
             source="turn_context",
         )
+        log_direct_response_evaluated(
+            direct_response_state=resp.state.value,
+            direct_response_reason=resp.reason,
+            direct_response_source=resp.source,
+            llm_skipped=False,
+            tool_execution_skipped=False,
+        )
+        return resp
 
     # Por defecto: delegar al agente
+    log_direct_response_evaluated(
+        direct_response_state=None,
+        direct_response_reason="delegated_to_agent",
+        direct_response_source="decision_layer",
+        llm_skipped=False,
+        tool_execution_skipped=False,
+    )
     return None
 
 

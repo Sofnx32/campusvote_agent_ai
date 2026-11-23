@@ -24,10 +24,15 @@ pytestmark = pytest.mark.asyncio
 
 @pytest_asyncio.fixture
 async def redis_store():
-    """Crea un ConversationStore conectado a Redis real."""
+    """Crea un ConversationStore conectado a Redis real. Se salta si Redis no está disponible."""
+    import pytest
     from app.conversation_store import ConversationStore
 
     redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
+    # Si REDIS_URL está vacío explícitamente, no hay Redis real disponible
+    if not redis_url:
+        pytest.skip("REDIS_URL no configurado (vacío), saltando pruebas de integración Redis")
+    
     try:
         print(f"[DEBUG] Creating store with redis_url={redis_url}")
         store = await ConversationStore.create(
@@ -35,6 +40,8 @@ async def redis_store():
             max_messages=20,
             ttl_seconds=1800,
         )
+        # Verificar que la conexión funciona realmente
+        await store.redis.ping()
         print(f"[DEBUG] Store created successfully")
         yield store
         # Cleanup: eliminar claves de prueba
@@ -48,7 +55,7 @@ async def redis_store():
         import traceback
         print(f"[DEBUG] Exception in fixture: {e}")
         traceback.print_exc()
-        pytest.skip(f"Redis no disponible: {e}")
+        pytest.skip(f"Redis no disponible en {redis_url}: {e}")
 
 
 async def test_redis_persistence_and_recovery(redis_store):

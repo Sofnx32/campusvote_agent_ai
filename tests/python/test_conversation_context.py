@@ -50,12 +50,22 @@ def _memory_with_fairs(*ids: str, turn: int = 2) -> ConversationMemory:
 
 @pytest_asyncio.fixture
 async def redis_store():
-    store = await ConversationStore.create(
-        redis_url=os.getenv("REDIS_URL", "redis://localhost:6379"),
-        max_messages=20,
-        ttl_seconds=1800,
-    )
+    """Fixture que crea un store Redis real. Se salta si Redis no está disponible."""
+    import pytest
+    redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
+    try:
+        store = await ConversationStore.create(
+            redis_url=redis_url,
+            max_messages=20,
+            ttl_seconds=1800,
+        )
+        # Verificar que la conexión funciona realmente
+        await store.redis.ping()
+    except Exception as e:
+        pytest.skip(f"Redis no disponible en {redis_url}: {e}")
+    
     yield store
+    
     if store.redis:
         keys = await store.redis.keys("ai:conversation:test:context:*")
         if keys:
@@ -116,7 +126,8 @@ async def test_01_rebuild_before_agent_and_bounded_context(monkeypatch):
         SimpleNamespace(), "Bearer service-token", "context-token", "corr-ctx",
     )
 
-    assert events == ["read_history", "read_memory", "agent", "write"]
+    # Fase 2.7: se agregó una llamada extra a get_history para log_conversation_memory_rebuilt
+    assert events == ["read_history", "read_memory", "read_history", "agent", "write"]
     assert calls["rebuild_reads"] == 1
     turn_context = calls["turn_context"]
     assert isinstance(turn_context, TurnContext)

@@ -138,8 +138,9 @@ def test_agent_aborts_before_llm_when_deadline_expired():
 def test_near_expiry_consumed_by_llm_aborts_before_tool():
     agent, _, _, _, AgentError, LLMResult, ToolCall = _deps()
     clock = FakeClock()
+    allowed = frozenset({"getSiteFairs"})
     provider = ClockProvider(
-        [LLMResult(tool_calls=[ToolCall(id="1", name="a", arguments={})])],
+        [LLMResult(tool_calls=[ToolCall(id="1", name="getSiteFairs", arguments={})], allowed_tools=allowed)],
         clock, consume=0.5,
     )
     tool = ToolSpy(clock)
@@ -170,19 +171,21 @@ def test_first_llm_receives_full_remaining_budget():
 def test_tools_and_second_llm_receive_monotonically_smaller_budgets():
     agent, _, _, _, _, LLMResult, ToolCall = _deps()
     clock, wait = FakeClock(), WaitSpy()
+    allowed1 = frozenset({"getSiteFairs", "getSiteProjects"})
+    allowed2 = frozenset()
     provider = ClockProvider([
         LLMResult(tool_calls=[
-            ToolCall(id="1", name="a", arguments={}),
-            ToolCall(id="2", name="b", arguments={}),
-        ]),
-        LLMResult(content="ok"),
+            ToolCall(id="1", name="getSiteFairs", arguments={}),
+            ToolCall(id="2", name="getSiteProjects", arguments={}),
+        ], allowed_tools=allowed1),
+        LLMResult(content="ok", allowed_tools=allowed2),
     ], clock)
     tool = ToolSpy(clock, consume=2.0)
     asyncio.run(agent.run_agent_turn(
         provider, {}, "m", [], tool,
         max_tool_calls=5, deadline_at=1020.0, clock=clock, wait_for=wait,
     ))
-    assert tool.calls == [("a", 20.0), ("b", 18.0)]
+    assert tool.calls == [("getSiteFairs", 20.0), ("getSiteProjects", 18.0)]
     # wait_for protege LLM1, herramienta a, herramienta b y LLM2; el ultimo
     # timeout es el restante real, sin reinicio del presupuesto.
     assert wait.timeouts == [20.0, 20.0, 18.0, 16.0]
@@ -191,16 +194,18 @@ def test_tools_and_second_llm_receive_monotonically_smaller_budgets():
 def test_tool_started_with_less_than_one_second_receives_reduced_budget():
     agent, _, _, _, _, LLMResult, ToolCall = _deps()
     clock, wait = FakeClock(), WaitSpy()
+    allowed1 = frozenset({"getSiteFairs"})
+    allowed2 = frozenset()
     provider = ClockProvider([
-        LLMResult(tool_calls=[ToolCall(id="1", name="a", arguments={})]),
-        LLMResult(content="ok"),
+        LLMResult(tool_calls=[ToolCall(id="1", name="getSiteFairs", arguments={})], allowed_tools=allowed1),
+        LLMResult(content="ok", allowed_tools=allowed2),
     ], clock, consume=19.4)
     tool = ToolSpy(clock)
     asyncio.run(agent.run_agent_turn(
         provider, {}, "m", [], tool,
         max_tool_calls=5, deadline_at=1020.0, clock=clock, wait_for=wait,
     ))
-    assert tool.calls == [("a", pytest.approx(0.6))]
+    assert tool.calls == [("getSiteFairs", pytest.approx(0.6))]
     # LLM1=20.0, herramienta=0.6 y LLM2=0.6: la herramienta tambien queda
     # acotada por wait_for y el presupuesto no se reinicia.
     assert wait.timeouts[0] == 20.0
@@ -211,8 +216,9 @@ def test_tool_started_with_less_than_one_second_receives_reduced_budget():
 def test_agent_rechecks_deadline_after_each_tool():
     agent, _, _, _, AgentError, LLMResult, ToolCall = _deps()
     clock = FakeClock()
+    allowed = frozenset({"getSiteFairs"})
     provider = ClockProvider([
-        LLMResult(tool_calls=[ToolCall(id="1", name="a", arguments={})]),
+        LLMResult(tool_calls=[ToolCall(id="1", name="getSiteFairs", arguments={})], allowed_tools=allowed),
     ], clock)
     tool = ToolSpy(clock, consume=20.0)
     with pytest.raises(AgentError) as error:
@@ -236,15 +242,17 @@ def test_legacy_deadline_seconds_and_three_argument_tool_mocks():
         called.append(tool_call.name)
         return {"success": True}
 
+    allowed1 = frozenset({"getSiteFairs"})
+    allowed2 = frozenset()
     provider = ClockProvider([
-        LLMResult(tool_calls=[ToolCall(id="1", name="a", arguments={})]),
-        LLMResult(content="ok"),
+        LLMResult(tool_calls=[ToolCall(id="1", name="getSiteFairs", arguments={})], allowed_tools=allowed1),
+        LLMResult(content="ok", allowed_tools=allowed2),
     ], FakeClock())
     result, results = asyncio.run(agent.run_agent_turn(
         provider, {}, "m", [], legacy_tool,
         max_tool_calls=5, deadline_seconds=5,
     ))
     assert result.content == "ok"
-    assert called == ["a"]
+    assert called == ["getSiteFairs"]
     assert len(results) == 1
     assert [call["allow_tools"] for call in provider.calls] == [True, True]

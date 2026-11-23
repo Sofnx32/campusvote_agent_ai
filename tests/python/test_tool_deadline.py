@@ -133,7 +133,7 @@ class SequenceProvider:
 
 def _tool_call():
     from app.models import ToolCall
-    return ToolCall(id="1", name="a", arguments={})
+    return ToolCall(id="1", name="getSiteFairs", arguments={})
 
 
 # --- A. Herramienta excede el deadline: cancelada, sin segunda llamada LLM ---
@@ -149,9 +149,11 @@ def test_tool_exceeding_deadline_is_cancelled_and_aborts_turn():
             state.append("cancelled")
             raise
 
+    allowed1 = frozenset({"getSiteFairs"})
+    allowed2 = frozenset()
     provider = SequenceProvider([
-        LLMResult(tool_calls=[_tool_call()]),
-        LLMResult(content="nunca"),
+        LLMResult(tool_calls=[_tool_call()], allowed_tools=allowed1),
+        LLMResult(content="nunca", allowed_tools=allowed2),
     ])
     wait = WaitForStub(timeout_on=2)  # 1 = LLM, 2 = herramienta
     with pytest.raises(AgentError) as error:
@@ -178,7 +180,8 @@ def test_legacy_three_argument_tool_is_also_protected():
             state.append("cancelled")
             raise
 
-    provider = ClockProvider(LLMResult(tool_calls=[_tool_call()]))
+    allowed = frozenset({"getSiteFairs"})
+    provider = ClockProvider(LLMResult(tool_calls=[_tool_call()], allowed_tools=allowed))
     wait = WaitForStub(timeout_on=2)
     with pytest.raises(AgentError) as error:
         asyncio.run(agent.run_agent_turn(
@@ -199,9 +202,11 @@ def test_tool_finishing_in_time_preserves_result_and_continues():
         seen.append(remaining_seconds)
         return {"success": True, "data": {"tool": tool_call.name}}
 
+    allowed1 = frozenset({"getSiteFairs"})
+    allowed2 = frozenset()
     provider = SequenceProvider([
-        LLMResult(tool_calls=[_tool_call()]),
-        LLMResult(content="listo"),
+        LLMResult(tool_calls=[_tool_call()], allowed_tools=allowed1),
+        LLMResult(content="listo", allowed_tools=allowed2),
     ])
     wait = WaitForStub()
     result, results = asyncio.run(agent.run_agent_turn(
@@ -209,7 +214,7 @@ def test_tool_finishing_in_time_preserves_result_and_continues():
         max_tool_calls=5, deadline_at=1020.0, clock=FakeClock(), wait_for=wait,
     ))
     assert result.content == "listo"
-    assert results == [{"success": True, "data": {"tool": "a"}}]
+    assert results == [{"success": True, "data": {"tool": "getSiteFairs"}}]
     assert seen == [20.0]
     assert wait.calls == [20.0, 20.0, 20.0]  # LLM1, herramienta, LLM2
     assert len(provider.calls) == 2
@@ -227,9 +232,11 @@ def test_timeout_vs_functional_agent_error():
         async def failing_tool(tool_call, ctx, message, remaining_seconds=None):
             raise AgentError(code, "fallo funcional", status, False)
 
+        allowed1 = frozenset({"getSiteFairs"})
+        allowed2 = frozenset()
         provider = SequenceProvider([
-            LLMResult(tool_calls=[_tool_call()]),
-            LLMResult(content="listo"),
+            LLMResult(tool_calls=[_tool_call()], allowed_tools=allowed1),
+            LLMResult(content="listo", allowed_tools=allowed2),
         ])
         if expect_raised:
             with pytest.raises(AgentError) as error:

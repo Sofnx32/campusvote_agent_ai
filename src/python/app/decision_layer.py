@@ -26,6 +26,7 @@ from dataclasses import dataclass
 from enum import Enum
 
 from .conversation_memory import TurnContext
+from .forensic import log_decision_completed
 
 
 class DecisionCategory(str, Enum):
@@ -299,7 +300,7 @@ def decide(
         ambiguous: bool | None = None,
         clarification: bool = False,
     ) -> Decision:
-        return Decision(
+        decision = Decision(
             category=category,
             reason=reason,
             needs_llm=True,  # Respuestas directas: Etapa 2.5+ (fuera de alcance).
@@ -315,6 +316,15 @@ def decide(
             pending_confirmation=pending,
             history_available=history_available,
         )
+        # Forensic: log decision
+        log_decision_completed(
+            decision_category=decision.category.value,
+            decision_reason=decision.reason,
+            allow_tools=decision.allow_tools,
+            needs_clarification=decision.needs_clarification,
+            selected_tool_count=0,  # La selección de herramientas ocurre en el proveedor
+        )
+        return decision
 
     # 1) Señales contradictorias: no se adivina ni se autoriza nada.
     if contradictory_ops:

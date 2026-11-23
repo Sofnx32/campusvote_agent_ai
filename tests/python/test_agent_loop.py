@@ -26,12 +26,13 @@ def run(coro):
 
 
 def test_loop_sends_assistant_tool_calls_and_tool_results_in_order():
+    allowed = frozenset({"getSiteOverview", "getSiteFairs"})
     provider = ScriptedProvider([
         LLMResult(tool_calls=[
             ToolCall(id="call-1", name="getSiteOverview", arguments={}),
             ToolCall(id="call-2", name="getSiteFairs", arguments={}),
-        ]),
-        LLMResult(content="Tienes 2 ferias."),
+        ], allowed_tools=allowed),
+        LLMResult(content="Tienes 2 ferias.", allowed_tools=frozenset()),
     ])
     executed = []
 
@@ -60,9 +61,10 @@ def test_loop_sends_assistant_tool_calls_and_tool_results_in_order():
 
 
 def test_loop_forces_a_final_text_answer_after_the_tool_budget():
+    allowed = frozenset({"getSiteFairs"})
     provider = ScriptedProvider([
-        LLMResult(tool_calls=[ToolCall(id="call-1", name="getSiteFairs", arguments={})]),
-        LLMResult(content="Resumen final."),
+        LLMResult(tool_calls=[ToolCall(id="call-1", name="getSiteFairs", arguments={})], allowed_tools=allowed),
+        LLMResult(content="Resumen final.", allowed_tools=frozenset()),
     ])
     executed = []
 
@@ -85,8 +87,9 @@ def test_loop_forces_a_final_text_answer_after_the_tool_budget():
 
 
 def test_loop_stops_when_the_deadline_is_exceeded():
+    allowed = frozenset({"getSiteFairs"})
     provider = ScriptedProvider([
-        LLMResult(tool_calls=[ToolCall(id="call-1", name="getSiteFairs", arguments={})]),
+        LLMResult(tool_calls=[ToolCall(id="call-1", name="getSiteFairs", arguments={})], allowed_tools=allowed),
     ])
     clock_values = iter([0.0, 30.0])
 
@@ -108,9 +111,10 @@ def test_loop_stops_when_the_deadline_is_exceeded():
 
 
 def test_loop_returns_correctable_tool_errors_to_the_model():
+    allowed = frozenset({"createFair"})
     provider = ScriptedProvider([
-        LLMResult(tool_calls=[ToolCall(id="call-1", name="createFair", arguments={"starts_at": "2026-11-20"})]),
-        LLMResult(content="¿A qué hora inicia y termina la feria?"),
+        LLMResult(tool_calls=[ToolCall(id="call-1", name="createFair", arguments={"starts_at": "2026-11-20"})], allowed_tools=allowed),
+        LLMResult(content="¿A qué hora inicia y termina la feria?", allowed_tools=frozenset()),
     ])
 
     async def execute(tool_call, context, message):
@@ -144,8 +148,9 @@ def test_loop_returns_correctable_tool_errors_to_the_model():
 
 
 def test_loop_still_aborts_on_non_correctable_tool_errors():
+    allowed = frozenset({"createFair"})
     provider = ScriptedProvider([
-        LLMResult(tool_calls=[ToolCall(id="call-1", name="createFair", arguments={})]),
+        LLMResult(tool_calls=[ToolCall(id="call-1", name="createFair", arguments={})], allowed_tools=allowed),
     ])
 
     async def execute(tool_call, context, message):

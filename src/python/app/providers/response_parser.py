@@ -13,6 +13,7 @@ from typing import FrozenSet
 from ..errors import AgentError
 from ..models import LLMResult, ToolCall
 from ..observability import current_metrics
+from ..forensic import log_tool_validation_rejected
 from .telemetry import emit_event
 from .tool_registry import TOOLS
 
@@ -31,6 +32,7 @@ def _tool_calls_from(
     Cada ToolCall recibe la allowlist inmutable del ciclo para validación
     pre-ejecución centralizada sin recálculos ni estado global mutable.
     """
+    from ..forensic import log_tool_validation_rejected
     if not raw_calls:
         return []
     if not isinstance(raw_calls, list):
@@ -45,6 +47,13 @@ def _tool_calls_from(
         name = function.get("name")
         if not isinstance(name, str) or name not in TOOLS:
             emit_event("warning", "llm_unknown_tool", model=model, tool=str(name)[:64])
+            # Forensic: herramienta desconocida en respuesta LLM
+            log_tool_validation_rejected(
+                validation_error_code="TOOL_NOT_FOUND",
+                tool_name=name,
+                tool_call_index=0,
+                allowed_tools=sorted(allowed_tools) if allowed_tools else [],
+            )
             raise AgentError("AI_TOOL_NOT_FOUND", "LLM requested an unknown tool", 502)
         arguments = function.get("arguments")
         if isinstance(arguments, str):

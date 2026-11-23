@@ -150,18 +150,24 @@ class TestConversationStore:
 
     async def test_8_recover_after_restart(self):
         """Escenario 8: Recuperar historial tras reiniciar el almacén (Redis real)."""
+        import pytest
         from app.conversation_store import ConversationStore
         import os
 
         # Usar Redis real para probar persistencia real
         redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
         key = "user1:org1:conv_restart"
-
-        store = await ConversationStore.create(
-            redis_url=redis_url,
-            max_messages=20,
-            ttl_seconds=1800,
-        )
+        
+        try:
+            store = await ConversationStore.create(
+                redis_url=redis_url,
+                max_messages=20,
+                ttl_seconds=1800,
+            )
+            # Verificar que la conexión funciona
+            await store.redis.ping()
+        except Exception as e:
+            pytest.skip(f"Redis no disponible en {redis_url}: {e}")
 
         await store.append_turn(key, "Mensaje persistente", "Respuesta persistente")
 

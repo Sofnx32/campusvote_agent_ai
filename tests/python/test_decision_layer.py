@@ -467,15 +467,17 @@ def test_33_max_tool_calls_limit_still_works():
     class FakeProvider:
         async def complete(self, context, messages, allow_tools=True):
             if len(executed) < 2:
+                allowed = frozenset({"getSiteFairs"})
                 return LLMResult(
                     content="",
                     tool_calls=[
                         ToolCall(id=f"call-{i}", name="getSiteFairs", arguments={})
                         for i in range(2)
                     ],
-                    usage={}, latency_ms=0.0, truncated=False
+                    usage={}, latency_ms=0.0, truncated=False,
+                    allowed_tools=allowed,
                 )
-            return LLMResult(content="ok", tool_calls=[], usage={}, latency_ms=0.0, truncated=False)
+            return LLMResult(content="ok", tool_calls=[], usage={}, latency_ms=0.0, truncated=False, allowed_tools=frozenset())
 
     async def fake_execute(tool_call, context, message, remaining_seconds=None):
         executed.append(tool_call.name)

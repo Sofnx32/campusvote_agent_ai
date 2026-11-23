@@ -181,7 +181,10 @@ def test_case_f_invalid_arguments_are_rejected_before_execution(monkeypatch):
 
 
 def test_case_g_mixed_calls_preserve_ids_without_unauthorized_execution(monkeypatch):
-    """G) Mezcla autorizada/no autorizada: 0 no autorizadas, IDs intactos."""
+    """G) Mezcla autorizada/no autorizada: 0 no autorizadas, IDs intactos.
+
+    Fase 2.6: error TOOL_NOT_ALLOWED para la herramienta fuera de allowlist.
+    """
     executed, captured = [], []
     Provider, AgentError = make_provider(
         monkeypatch,
@@ -197,8 +200,10 @@ def test_case_g_mixed_calls_preserve_ids_without_unauthorized_execution(monkeypa
             recorder, CONTEXT, FERIAS, [], spy(executed),
             max_tool_calls=5, deadline_seconds=5,
         ))
-    assert error.value.code == "AI_TOOL_NOT_FOUND"
+    assert error.value.code == "TOOL_NOT_ALLOWED"
     assert executed == []
+    assert error.value.details["tool"] == "getSiteResults"
+    assert error.value.details["reason"] == "TOOL_NOT_ALLOWED"
     # El parser conservó todas las llamadas y sus IDs antes del rechazo.
     assert [call.id for call in recorder.results[0].tool_calls] == ["ok-1", "bad-1"]
     assert [call.name for call in recorder.results[0].tool_calls] == [
@@ -207,7 +212,10 @@ def test_case_g_mixed_calls_preserve_ids_without_unauthorized_execution(monkeypa
 
 
 def test_case_h_fallback_applies_the_same_authorization(monkeypatch):
-    """H) Fallback con tool_calls: misma autorización y 0 ejecuciones fuera del conjunto."""
+    """H) Fallback con tool_calls: misma autorización y 0 ejecuciones fuera del conjunto.
+
+    Fase 2.6: error TOOL_NOT_ALLOWED en fallback (misma allowlist).
+    """
     executed, captured = [], []
     Provider, AgentError = make_provider(
         monkeypatch,
@@ -219,8 +227,9 @@ def test_case_h_fallback_applies_the_same_authorization(monkeypatch):
             Provider(), CONTEXT, FERIAS, [], spy(executed),
             max_tool_calls=5, deadline_seconds=5,
         ))
-    assert error.value.code == "AI_TOOL_NOT_FOUND"
+    assert error.value.code == "TOOL_NOT_ALLOWED"
     assert executed == []
+    assert error.value.details["reason"] == "TOOL_NOT_ALLOWED"
     assert len(captured) == 2  # primario + fallback
     assert len(captured[1]["url"]) > 0
     assert "getSiteResults" not in [

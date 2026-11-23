@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 from collections import defaultdict
+from dataclasses import field
 from datetime import datetime, timezone
 import json
 import logging
@@ -25,6 +26,26 @@ from .conversation_store import ConversationStore
 from .conversation_memory import ConversationMemory, TurnContext
 from .decision_layer import decide, decision_metrics
 from .direct_response import direct_response, direct_response_metrics, DirectResponseState
+from .forensic import (
+    correlation_id_context,
+    set_correlation_id,
+    get_correlation_id,
+    get_request_id,
+    log_request_received,
+    log_history_loaded,
+    log_conversation_memory_rebuilt,
+    log_turn_context_resolved,
+    log_decision_completed,
+    log_direct_response_evaluated,
+    log_direct_response_used,
+    log_tool_selection_completed,
+    log_conversation_turn_persisted,
+    log_response_built,
+    log_request_completed,
+    log_request_failed,
+    categorize_error,
+    StageTimer,
+)
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 logger = logging.getLogger("campusvote-agent-python")
@@ -259,161 +280,274 @@ async def chat(
     x_ai_context: str | None = Header(default=None),
     x_correlation_id: str | None = Header(default=None),
 ):
+    # A. Recepción: configuración de correlación y validación inicial
+    corr_token = set_correlation_id(payload.correlation_id)
+    request_id = get_request_id()
+    
     verify_service_token(authorization)
     context = verify_context(x_ai_context)
+    
+    # Log recepción
+    log_request_received("/v1/chat", "valid", list(context.keys()))
+    
     # Un único instante absoluto compartido por LLM y herramientas.
     agent_deadline_at = absolute_deadline(context["deadline_at"])
     if x_correlation_id != payload.correlation_id or x_correlation_id != context["correlation_id"]:
+        log_request_failed(
+            total_duration_ms=0,
+            stage_durations={},
+            error_code="AI_INVALID_REQUEST",
+            error_category=categorize_error("AI_INVALID_REQUEST"),
+        )
         raise AgentError("AI_INVALID_REQUEST", "Correlation id mismatch", 400)
     context["_raw_token"] = x_ai_context
     context["conversation_id"] = payload.conversation_id
-    # Orden estricto: la lectura del historial y la reconstrucción de memoria
-    # finalizan antes de ejecutar el agente; la escritura ocurre al final.
-    history = await get_history(payload.conversation_id, context)
-    memory = await get_or_create_memory(payload.conversation_id, context)
-    entities = {}
-    if memory:
-        entities = memory.extract_entities_from_message(payload.message)
-    # Resolución determinista ANTES de la decisión del agente. No ejecuta
-    # herramientas ni hace llamadas LLM adicionales; solo produce datos.
-    turn_context = memory.resolve_turn_context(payload.message) if memory else TurnContext()
-    context["conversation_context"] = turn_context.to_dict()
-    # Decision Layer: clasificación local y determinista ANTES del agente. No
-    # ejecuta herramientas, no hace LLM adicional y no autoriza escrituras.
-    decision = decide(
-        payload.message,
-        turn_context,
-        history_available=bool(history),
-    )
-    context["decision"] = decision.to_dict()
-    logger.info(json.dumps(
-        decision_metrics(decision, request_id_context.get()), ensure_ascii=False
-    ))
+    
+    # Timers para medición de etapas
+    stage_timers = {
+        "history_load": StageTimer("history_load"),
+        "memory_rebuild": StageTimer("memory_rebuild"),
+        "turn_context": StageTimer("turn_context"),
+        "decision_layer": StageTimer("decision_layer"),
+        "direct_response": StageTimer("direct_response"),
+        "agent_turn": StageTimer("agent_turn"),
+        "persistence": StageTimer("persistence"),
+    }
+    
+    try:
+        # B. Historial/Memoria
+        history = await get_history(payload.conversation_id, context)
+        stage_timers["history_load"] = StageTimer("history_load")  # Reset after await
+        log_history_loaded(len(history))
+        
+        memory = await get_or_create_memory(payload.conversation_id, context)
+        stage_timers["memory_rebuild"] = StageTimer("memory_rebuild")
+        # Contar turnos reconstruidos aproximado
+        turn_count = len([m for m in (await get_history(payload.conversation_id, context)) if m.get("role") == "user"])
+        log_conversation_memory_rebuilt(turn_count)
+        
+        entities = {}
+        if memory:
+            entities = memory.extract_entities_from_message(payload.message)
+        
+        # Resolución determinista ANTES de la decisión del agente
+        turn_context = memory.resolve_turn_context(payload.message) if memory else TurnContext()
+        stage_timers["turn_context"] = StageTimer("turn_context")
+        context["conversation_context"] = turn_context.to_dict()
+        log_turn_context_resolved(
+            resolved_reference_count=len(turn_context.resolved),
+            ambiguous_reference_count=len(turn_context.ambiguous),
+            selected_entity_count=len(turn_context.selected),
+            last_query_fresh=bool(turn_context.last_query and turn_context.last_query.get("fresh")),
+            last_query_tool=turn_context.last_query.get("tool") if turn_context.last_query else None,
+        )
+        
+        # C. Decision Layer
+        stage_timers["decision_layer"] = StageTimer("decision_layer")
+        decision = decide(
+            payload.message,
+            turn_context,
+            history_available=bool(history),
+        )
+        context["decision"] = decision.to_dict()
+        logger.info(json.dumps(
+            decision_metrics(decision, request_id_context.get()), ensure_ascii=False
+        ))
+        log_decision_completed(
+            decision_category=decision.category.value,
+            decision_reason=decision.reason,
+            allow_tools=decision.allow_tools,
+            needs_clarification=decision.needs_clarification,
+            selected_tool_count=0,  # Se actualiza tras selección de herramientas
+        )
+        
+        # D. Direct Response Layer
+        stage_timers["direct_response"] = StageTimer("direct_response")
+        direct = direct_response(
+            payload.message,
+            decision,
+            turn_context,
+            memory,
+            history,
+        )
+        logger.info(json.dumps(
+            direct_response_metrics(direct, request_id_context.get()), ensure_ascii=False
+        ))
+        log_direct_response_evaluated(
+            direct_response_state=direct.state.value if direct else None,
+            direct_response_reason=direct.reason if direct else None,
+            direct_response_source=direct.source if direct else None,
+            llm_skipped=direct.state == DirectResponseState.ANSWERED if direct else False,
+            tool_execution_skipped=direct.state == DirectResponseState.ANSWERED if direct else False,
+        )
+        
+        if direct is not None and direct.state == DirectResponseState.ANSWERED:
+            log_direct_response_used(
+                direct_response_state=direct.state.value,
+                direct_response_reason=direct.reason,
+                direct_response_source=direct.source,
+            )
+        
+        if direct is not None and direct.state == DirectResponseState.ANSWERED:
+            # Respuesta directa: omitir LLM y herramientas completamente
+            reply_content = direct.text
+            tool_calls_serializable = None
+            tool_results_serializable = []
+            pending_operation = None
+            confirmation_state = "none"
+            class _DirectCurrent:
+                content = ""
+                tool_calls = []
+                truncated = False
+            current = _DirectCurrent()
+            current.content = direct.text
+            results = []
+        else:
+            # E. Selección de herramientas (ocurre dentro de run_agent_turn/provider)
+            # F. LLM request/response (dentro de provider)
+            # G. Validación de herramientas (dentro de agent.py)
+            # H. Ejecución de herramientas (dentro de agent.py)
+            stage_timers["agent_turn"] = StageTimer("agent_turn")
+            current, results = await run_agent_turn(
+                provider,
+                context,
+                payload.message,
+                history,
+                execute_tool,
+                max_tool_calls=settings.max_tool_calls,
+                deadline_at=agent_deadline_at,
+                turn_context=turn_context,
+                decision=decision,
+            )
+        
+        last_result = results[-1] if results and isinstance(results[-1], dict) else None
+        last_action = last_result.get("data") if last_result else None
+        last_tool = last_result.get("tool") if last_result else None
+        list_tools = {
+            "getSiteFairs", "getSiteProjects", "getSiteStands", "getSiteResults",
+            "listTeachingCriteria", "listFairStands", "listFairCategories", "listFairCategoryRubrics"
+        }
+        tool_data = last_result.get("data") if last_result and last_tool in list_tools else None
+        reply_content = (current.content or "").strip()
+        if not reply_content:
+            if isinstance(last_action, dict) and last_action.get("status") == "confirmation_required":
+                reply_content = "Preparé la propuesta con los datos indicados. Revísala y confirma para aplicarla."
+            elif last_result and last_result.get("success") is False:
+                reason = (last_result.get("error") or {}).get("message")
+                reply_content = (
+                    f"No pude completar la operación: {reason}"
+                    if isinstance(reason, str) and reason.strip()
+                    else "No pude completar la operación con esos datos. Revísalos e inténtalo de nuevo."
+                )
+            else:
+                raise AgentError("AI_RESPONSE_INVALID", "LLM returned no content", 502)
+        if isinstance(last_action, dict) and last_action.get("status") == "confirmation_required" and last_action.get("tool") == "createFair":
+            reply_content = (
+                "Revisa los datos de la feria en la tarjeta. Sube la portada desde aquí; "
+                "podrás confirmar cuando esté lista."
+            )
+        # Última barrera: si el modelo volcó un JSON técnico, la conversación recibe
+        # un resumen conversacional en lugar del payload del backend.
+        reply_content = sanitize_assistant_content(reply_content)[:4000]
 
-    # Direct Response Layer: intenta responder directamente con evidencia
-    # verificable SIN invocar LLM ni herramientas.
-    direct = direct_response(
-        payload.message,
-        decision,
-        turn_context,
-        memory,
-        history,
-    )
-    logger.info(json.dumps(
-        direct_response_metrics(direct, request_id_context.get()), ensure_ascii=False
-    ))
+        # Extraer tool_calls serializables
+        tool_calls_serializable = [
+            {"id": tc.id, "name": tc.name, "arguments": tc.arguments}
+            for tc in current.tool_calls
+        ] if current.tool_calls else None
 
-    if direct is not None and direct.state == DirectResponseState.ANSWERED:
-        # Respuesta directa: omitir LLM y herramientas completamente.
-        # Persistir turno con el mismo mecanismo y orden del flujo normal.
-        reply_content = direct.text
-        tool_calls_serializable = None
+        # Extraer tool_results con nombre de herramienta
         tool_results_serializable = []
-        # No hay operación pendiente nueva desde respuesta directa
+        for i, result in enumerate(results):
+            if isinstance(result, dict):
+                tool_name = None
+                if i < len(current.tool_calls):
+                    tool_name = current.tool_calls[i].name
+                tool_results_serializable.append({
+                    "tool": tool_name,
+                    "success": result.get("success"),
+                    "data": result.get("data"),
+                    "error": result.get("error"),
+                })
+
+        # Estado de confirmación derivado del resultado real del turno
         pending_operation = None
         confirmation_state = "none"
-        # current simulado para construir respuesta y métricas
-        class _DirectCurrent:
-            content = ""
-            tool_calls = []
-            truncated = False
-        current = _DirectCurrent()
-        current.content = direct.text  # Usar la respuesta directa como contenido
-        results = []
-    else:
-        # Fallback: flujo normal con run_agent_turn
-        current, results = await run_agent_turn(
-            provider,
+        if isinstance(last_action, dict) and last_action.get("status") == "confirmation_required":
+            pending_operation = {
+                "tool": last_action.get("tool") or last_tool,
+                "operation_id": last_action.get("operation_id"),
+                "version": last_action.get("version"),
+            }
+            confirmation_state = "awaiting_confirmation"
+
+        # I. Persistencia y respuesta
+        stage_timers["persistence"] = StageTimer("persistence")
+        await save_turn(
+            payload.conversation_id,
             context,
             payload.message,
-            history,
-            execute_tool,
-            max_tool_calls=settings.max_tool_calls,
-            deadline_at=agent_deadline_at,
-            turn_context=turn_context,
-            decision=decision,
+            reply_content,
+            tool_calls=tool_calls_serializable,
+            tool_results=tool_results_serializable,
+            entities=entities if entities else None,
+            pending_operation=pending_operation,
+            confirmation_state=confirmation_state,
         )
-    last_result = results[-1] if results and isinstance(results[-1], dict) else None
-    last_action = last_result.get("data") if last_result else None
-    last_tool = last_result.get("tool") if last_result else None
-    list_tools = {
-        "getSiteFairs", "getSiteProjects", "getSiteStands", "getSiteResults",
-        "listTeachingCriteria", "listFairStands", "listFairCategories", "listFairCategoryRubrics"
-    }
-    tool_data = last_result.get("data") if last_result and last_tool in list_tools else None
-    reply_content = (current.content or "").strip()
-    if not reply_content:
-        if isinstance(last_action, dict) and last_action.get("status") == "confirmation_required":
-            reply_content = "Preparé la propuesta con los datos indicados. Revísala y confirma para aplicarla."
-        elif last_result and last_result.get("success") is False:
-            reason = (last_result.get("error") or {}).get("message")
-            reply_content = (
-                f"No pude completar la operación: {reason}"
-                if isinstance(reason, str) and reason.strip()
-                else "No pude completar la operación con esos datos. Revísalos e inténtalo de nuevo."
-            )
-        else:
-            raise AgentError("AI_RESPONSE_INVALID", "LLM returned no content", 502)
-    if isinstance(last_action, dict) and last_action.get("status") == "confirmation_required" and last_action.get("tool") == "createFair":
-        reply_content = (
-            "Revisa los datos de la feria en la tarjeta. Sube la portada desde aquí; "
-            "podrás confirmar cuando esté lista."
+        log_conversation_turn_persisted(
+            message_count=2,  # user + assistant
+            has_tool_calls=bool(tool_calls_serializable),
+            pending_operation=bool(pending_operation),
+            confirmation_state=confirmation_state,
         )
-    # Última barrera: si el modelo volcó un JSON técnico, la conversación recibe
-    # un resumen conversacional en lugar del payload del backend.
-    reply_content = sanitize_assistant_content(reply_content)[:4000]
-
-    # Extraer tool_calls serializables
-    tool_calls_serializable = [
-        {"id": tc.id, "name": tc.name, "arguments": tc.arguments}
-        for tc in current.tool_calls
-    ] if current.tool_calls else None
-
-    # Extraer tool_results con nombre de herramienta
-    tool_results_serializable = []
-    for i, result in enumerate(results):
-        if isinstance(result, dict):
-            tool_name = None
-            if i < len(current.tool_calls):
-                tool_name = current.tool_calls[i].name
-            tool_results_serializable.append({
-                "tool": tool_name,
-                "success": result.get("success"),
-                "data": result.get("data"),
-                "error": result.get("error"),
-            })
-
-    # Estado de confirmación derivado del resultado real del turno (Node sigue
-    # siendo la fuente de verdad de las propuestas pendientes).
-    pending_operation = None
-    confirmation_state = "none"
-    if isinstance(last_action, dict) and last_action.get("status") == "confirmation_required":
-        pending_operation = {
-            "tool": last_action.get("tool") or last_tool,
-            "operation_id": last_action.get("operation_id"),
-            "version": last_action.get("version"),
+        
+        ui, operation = build_ui(last_action)
+        log_response_built(
+            has_ui=bool(ui and ui.get("type") != "message"),
+            has_operation=operation is not None,
+            tool_calls_count=len(results),
+            is_direct_response=direct is not None and direct.state == DirectResponseState.ANSWERED,
+        )
+        
+        # Recopilar duraciones de etapas
+        stage_durations = {
+            name: timer.elapsed_ms() for name, timer in stage_timers.items()
         }
-        confirmation_state = "awaiting_confirmation"
-
-    await save_turn(
-        payload.conversation_id,
-        context,
-        payload.message,
-        reply_content,
-        tool_calls=tool_calls_serializable,
-        tool_results=tool_results_serializable,
-        entities=entities if entities else None,
-        pending_operation=pending_operation,
-        confirmation_state=confirmation_state,
-    )
-    ui, operation = build_ui(last_action)
-    return {
-        "success": True,
-        "conversation_id": payload.conversation_id,
-        "message": {"role": "assistant", "content": reply_content},
-        "ui": ui,
-        "operation": operation,
-        "citations": [],
-        "suggested_actions": [],
-        "meta": {"correlation_id": payload.correlation_id, "tool_calls": len(results), "truncated": bool(current.truncated), "last_tool": last_tool, "tool_data": tool_data},
-    }
+        
+        outcome = "direct_response" if (direct is not None and direct.state == DirectResponseState.ANSWERED) else "agent_response"
+        log_request_completed(
+            total_duration_ms=sum(stage_durations.values()),
+            stage_durations=stage_durations,
+            outcome=outcome,
+        )
+        
+        return {
+            "success": True,
+            "conversation_id": payload.conversation_id,
+            "message": {"role": "assistant", "content": reply_content},
+            "ui": ui,
+            "operation": operation,
+            "citations": [],
+            "suggested_actions": [],
+            "meta": {"correlation_id": payload.correlation_id, "tool_calls": len(results), "truncated": bool(current.truncated), "last_tool": last_tool, "tool_data": tool_data},
+        }
+    except AgentError as e:
+        stage_durations = {name: timer.elapsed_ms() for name, timer in stage_timers.items()}
+        log_request_failed(
+            total_duration_ms=sum(stage_durations.values()),
+            stage_durations=stage_durations,
+            error_code=e.code,
+            error_category=categorize_error(e.code),
+        )
+        raise
+    except Exception as e:
+        stage_durations = {name: timer.elapsed_ms() for name, timer in stage_timers.items()}
+        log_request_failed(
+            total_duration_ms=sum(stage_durations.values()),
+            stage_durations=stage_durations,
+            error_code="AI_INTERNAL_ERROR",
+            error_category=categorize_error("AI_INTERNAL_ERROR"),
+        )
+        raise
+    finally:
+        correlation_id_context.reset(corr_token)

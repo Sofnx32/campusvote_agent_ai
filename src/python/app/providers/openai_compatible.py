@@ -17,6 +17,11 @@ from ..config import settings
 from ..errors import AgentError
 from ..models import LLMResult
 from ..observability import current_metrics, request_id_context
+from ..forensic import (
+    log_llm_request_started,
+    log_llm_request_completed,
+    log_llm_request_failed,
+)
 from ..prompts import system_prompt
 from .base import LLMProvider
 from .http_transport import send_once
@@ -159,6 +164,15 @@ class OpenAICompatibleProvider(LLMProvider):
             attempt_started = time.monotonic()
             if metrics:
                 metrics.llm_calls += 1
+            
+            # Forensic: LLM request started
+            log_llm_request_started(
+                model=model,
+                is_fallback=is_fallback,
+                attempt=attempt,
+                allowed_tool_count=len(allowed_tools) if allowed_tools else 0,
+            )
+            
             try:
                 result = await send_once(
                     url, model, api_key, payload,
@@ -175,6 +189,18 @@ class OpenAICompatibleProvider(LLMProvider):
                     max_retries=settings.llm_max_retries, latency_ms=latency,
                     is_fallback=is_fallback, usage=result.usage or None,
                 )
+                # Forensic: LLM request completed
+                log_llm_request_completed(
+                    model=model,
+                    is_fallback=is_fallback,
+                    attempt=attempt,
+                    duration_ms=latency,
+                    response_tool_call_count=len(result.tool_calls) if result.tool_calls else 0,
+                    response_has_tool_calls=bool(result.tool_calls),
+                    prompt_tokens=result.usage.get("prompt_tokens", 0) if result.usage else 0,
+                    completion_tokens=result.usage.get("completion_tokens", 0) if result.usage else 0,
+                    total_tokens=result.usage.get("total_tokens", 0) if result.usage else 0,
+                )
                 return result
             except AgentError as error:
                 latency = (time.monotonic() - attempt_started) * 1000
@@ -190,6 +216,15 @@ class OpenAICompatibleProvider(LLMProvider):
                     max_retries=settings.llm_max_retries, latency_ms=latency,
                     is_fallback=is_fallback, error_code=error.code,
                     origin_status=details.get("origin_status"),
+                )
+                # Forensic: LLM request failed
+                log_llm_request_failed(
+                    model=model,
+                    is_fallback=is_fallback,
+                    attempt=attempt,
+                    duration_ms=latency,
+                    provider_error_code=error.code,
+                    retry_attempt=attempt,
                 )
                 if attempt >= attempts or not is_retryable(error):
                     raise

@@ -10,6 +10,11 @@ import httpx
 
 from ..errors import AgentError
 from ..models import LLMResult
+from ..forensic import (
+    log_llm_request_started,
+    log_llm_request_completed,
+    log_llm_request_failed,
+)
 from .response_parser import parse_response
 from .retry_policy import NON_RETRYABLE_HTTP_STATUSES, RETRYABLE_HTTP_STATUSES, parse_retry_after
 from .telemetry import emit_event

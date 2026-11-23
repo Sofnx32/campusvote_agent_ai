@@ -16,6 +16,16 @@ from .decision_layer import Decision
 from .providers.tool_registry import TOOLS
 from .providers.tool_selector import select_tool_names
 from .config import settings
+from .forensic import (
+    log_tool_selection_completed,
+    log_tool_validation_started,
+    log_tool_validation_passed,
+    log_tool_validation_rejected,
+    log_tool_execution_started,
+    log_tool_execution_completed,
+    log_tool_execution_failed,
+    categorize_error,
+)
 
 logger = logging.getLogger(__name__)
 MAX_CORRECTABLE_FAILURES = 2
@@ -101,6 +111,12 @@ def _validate_tool_call(
     # Si el LLM devolvió tool_calls pero allow_tools=False (o sin schemas),
     # allowed_tools será frozenset() -> rechazo con TOOL_NOT_ALLOWED
     if allowed_tools and call.name not in allowed_tools:
+        log_tool_validation_rejected(
+            validation_error_code="TOOL_NOT_ALLOWED",
+            tool_name=call.name,
+            tool_call_index=executed,
+            allowed_tools=sorted(allowed_tools) if allowed_tools else [],
+        )
         raise AgentError(
             "TOOL_NOT_ALLOWED",
             f"Tool '{call.name}' not in allowlist for this LLM cycle",
@@ -116,6 +132,12 @@ def _validate_tool_call(
     # significa que el LLM devolvió tool_calls cuando no se anunciaron schemas.
     # El parser ya validó existencia en TOOLS, pero no hay autorización -> TOOL_NOT_ALLOWED
     if not allowed_tools and decision_allow_tools:
+        log_tool_validation_rejected(
+            validation_error_code="TOOL_NOT_ALLOWED",
+            tool_name=call.name,
+            tool_call_index=executed,
+            allowed_tools=[],
+        )
         raise AgentError(
             "TOOL_NOT_ALLOWED",
             "Tools were not announced for this LLM cycle (allow_tools=True but no schemas sent)",
@@ -203,13 +225,32 @@ async def run_agent_turn(
         # current.allowed_tools es la allowlist inmutable del ciclo LLM actual
         cycle_allowed = current.allowed_tools if isinstance(current.allowed_tools, frozenset) else frozenset()
         decision_allow = decision.allow_tools if decision else True
+        
+        # E. Selección de herramientas (log)
+        if calls:
+            log_tool_selection_completed(
+                selected_tool_count=len(calls),
+                selected_tool_names=[c.name for c in calls],
+                selection_reason="llm_generated",
+                allowed_tool_count=len(cycle_allowed) if cycle_allowed else 0,
+            )
+        
         for call in calls:
+            log_tool_validation_started(
+                tool_name=call.name,
+                tool_call_index=executed,
+                allowed_tool_count=len(cycle_allowed) if cycle_allowed else 0,
+            )
             _validate_tool_call(
                 call=call,
                 allowed_tools=cycle_allowed,
                 executed=executed,
                 max_tool_calls=max_tool_calls,
                 decision_allow_tools=decision_allow,
+            )
+            log_tool_validation_passed(
+                tool_name=call.name,
+                tool_call_index=executed,
             )
 
         current.tool_calls = calls
@@ -230,12 +271,26 @@ async def run_agent_turn(
             # de escritura. wait_for acota la corrutina completa (no solo la
             # espera HTTP); al expirar cancela la espera local en Python, sin
             # revertir procesamiento externo ya recibido por Node.js.
+            
+            log_tool_execution_started(
+                tool_name=call.name,
+                tool_call_index=executed,
+                tool_call_id=call.id,
+            )
             try:
                 result = await wait_for(
                     execute_tool(call, context, message, **kwargs),
                     timeout=remaining_global,
                 )
             except (asyncio.TimeoutError, TimeoutError) as error:
+                log_tool_execution_failed(
+                    tool_name=call.name,
+                    tool_call_index=executed,
+                    tool_call_id=call.id,
+                    duration_ms=(clock() - tool_started) * 1000,
+                    error_type="timeout",
+                    error_code="AI_DEADLINE_EXCEEDED",
+                )
                 raise AgentError(
                     "AI_DEADLINE_EXCEEDED", "Tool exceeded remaining global budget",
                     504, True,
@@ -245,8 +300,24 @@ async def run_agent_turn(
                 # modelo como resultado de la herramienta para que corrija el
                 # dato o le pida al usuario la información que falta.
                 if error.code not in CORRECTABLE_CODES or correctable_failures >= MAX_CORRECTABLE_FAILURES:
+                    log_tool_execution_failed(
+                        tool_name=call.name,
+                        tool_call_index=executed,
+                        tool_call_id=call.id,
+                        duration_ms=(clock() - tool_started) * 1000,
+                        error_type="agent_error",
+                        error_code=error.code,
+                    )
                     raise
                 correctable_failures += 1
+                log_tool_execution_completed(
+                    tool_name=call.name,
+                    tool_call_index=executed,
+                    tool_call_id=call.id,
+                    duration_ms=(clock() - tool_started) * 1000,
+                    functional_status="error",
+                    error_code=error.code,
+                )
                 result = {
                     "success": False,
                     "error": {
@@ -256,6 +327,14 @@ async def run_agent_turn(
                     },
                 }
             except Exception as error:
+                log_tool_execution_failed(
+                    tool_name=call.name,
+                    tool_call_index=executed,
+                    tool_call_id=call.id,
+                    duration_ms=(clock() - tool_started) * 1000,
+                    error_type="unexpected",
+                    error_code="TOOL_EXECUTION_FAILED",
+                )
                 logger.warning(
                     "tool_execution_failed requestId=%s tool=%s cause=%s",
                     request_id_context.get(), call.name, type(error).__name__,
@@ -264,6 +343,21 @@ async def run_agent_turn(
                     "TOOL_EXECUTION_FAILED", "Unexpected tool execution failure", 502, False,
                     details={"tool": call.name, "cause": type(error).__name__},
                 ) from error
+            else:
+                functional_status = "success"
+                if isinstance(result, dict):
+                    if result.get("success") is False:
+                        functional_status = "error"
+                    if isinstance(result.get("data"), dict) and result["data"].get("status") == "confirmation_required":
+                        functional_status = "confirmation_required"
+                log_tool_execution_completed(
+                    tool_name=call.name,
+                    tool_call_index=executed,
+                    tool_call_id=call.id,
+                    duration_ms=(clock() - tool_started) * 1000,
+                    functional_status=functional_status,
+                    error_code=result.get("error", {}).get("code") if isinstance(result, dict) and not result.get("success") else None,
+                )
             finally:
                 if metrics:
                     metrics.tool_calls += 1
