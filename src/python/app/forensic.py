@@ -503,6 +503,60 @@ def log_request_failed(
     _safe_log(event)
 
 
+# Vocabulario cerrado de razones para respuestas inválidas del LLM. Cualquier
+# evento `llm_invalid_response` emitido antes de lanzar el error debe usar una
+# de estas razones (o la forma parametrizada `unselected_tool:<tool_name>`).
+LLM_INVALID_RESPONSE_REASONS = frozenset({
+    "empty_content_after_tools",
+    "empty_content_no_tools",
+    "invalid_tool_json",
+    "finish_reason",
+})
+
+
+def log_llm_invalid_response(
+    reason: str,
+    *,
+    selected_tool_names: list[str] | None = None,
+    error_code: str = "LLM_INVALID_RESPONSE",
+    outcome: str = "raised",
+    **extra: object,
+) -> None:
+    """Registra estructuralmente una respuesta inválida del LLM.
+
+    Es obligatorio invocarla inmediatamente antes de lanzar
+    ``LLM_INVALID_RESPONSE`` (o su equivalente funcional) para que el
+    diagnóstico incluya siempre ``reason``, ``correlation_id`` y
+    ``selected_tool_names``. El evento es seguro: nunca interrumpe el flujo.
+
+    Args:
+        reason: Una de ``LLM_INVALID_RESPONSE_REASONS`` o
+            ``unselected_tool:<tool_name>``.
+        selected_tool_names: Herramientas anunciadas en el ciclo LLM actual.
+        error_code: Código que se lanzará (o que se está recuperando).
+        outcome: ``"raised"`` cuando se lanza el error, ``"recovered"`` cuando
+            se sustituye por una respuesta determinista o se reintenta.
+    """
+    if reason not in LLM_INVALID_RESPONSE_REASONS and not reason.startswith("unselected_tool:"):
+        # Nunca silenciar el evento: se conserva la razón real como detalle.
+        extra.setdefault("raw_reason", reason)
+        reason = "invalid_tool_json"
+    event_name = (
+        "llm_invalid_response_recovered"
+        if outcome == "recovered"
+        else "llm_invalid_response"
+    )
+    event = _build_base_event(
+        event_name,
+        error_code=error_code,
+        reason=reason,
+        selected_tool_names=list(selected_tool_names or []),
+        outcome=outcome,
+        **extra,
+    )
+    _safe_log(event)
+
+
 # =============================================================================
 # HELPERS DE DURACIÓN
 # =============================================================================

@@ -17,6 +17,7 @@ from .config import deadline_chain, settings, validate_configuration
 from .context import verify_context, verify_service_token
 from .errors import AgentError, error_payload
 from .agent import run_agent_turn
+from .deterministic_responses import build_deterministic_response
 from .llm import get_provider
 from .models import ChatRequest
 from .observability import RequestMetrics, log_request_metrics, metrics_context, request_id_context
@@ -43,6 +44,7 @@ from .forensic import (
     log_response_built,
     log_request_completed,
     log_request_failed,
+    log_llm_invalid_response,
     categorize_error,
     StageTimer,
 )
@@ -468,6 +470,10 @@ async def chat(
             "listTeachingCriteria", "listFairStands", "listFairCategories", "listFairCategoryRubrics"
         }
         tool_data = last_result.get("data") if last_result and last_tool in list_tools else None
+        announced_tool_names = sorted(current.allowed_tools) if getattr(current, "allowed_tools", None) else []
+        deterministic_context = {
+            "conversation_context": turn_context.to_dict() if turn_context is not None else {},
+        }
         reply_content = (current.content or "").strip()
         if not reply_content:
             if isinstance(last_action, dict) and last_action.get("status") == "confirmation_required":
@@ -480,7 +486,29 @@ async def chat(
                     else "No pude completar la operación con esos datos. Revísalos e inténtalo de nuevo."
                 )
             else:
-                raise AgentError("AI_RESPONSE_INVALID", "LLM returned no content", 502)
+                # El LLM no redactó la respuesta final, pero una lectura ya se
+                # ejecutó: responder de forma determinista sin romper el turno.
+                deterministic = build_deterministic_response(
+                    results, announced_tool_names, deterministic_context
+                )
+                invalid_reason = (
+                    "empty_content_after_tools" if results else "empty_content_no_tools"
+                )
+                if deterministic:
+                    log_llm_invalid_response(
+                        invalid_reason,
+                        selected_tool_names=announced_tool_names,
+                        error_code="AI_RESPONSE_INVALID",
+                        outcome="recovered",
+                    )
+                    reply_content = deterministic
+                else:
+                    log_llm_invalid_response(
+                        invalid_reason,
+                        selected_tool_names=announced_tool_names,
+                        error_code="AI_RESPONSE_INVALID",
+                    )
+                    raise AgentError("AI_RESPONSE_INVALID", "LLM returned no content", 502)
         if isinstance(last_action, dict) and last_action.get("status") == "confirmation_required" and last_action.get("tool") == "createFair":
             reply_content = (
                 "Revisa los datos de la feria en la tarjeta. Sube la portada desde aquí; "

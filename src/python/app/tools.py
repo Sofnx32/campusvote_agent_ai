@@ -52,6 +52,8 @@ async def execute_tool(
         "listFairStands",
         "listFairCategories",
         "listFairCategoryRubrics",
+        "getFairRubric",
+        "setup_category_with_rubric",
         "listTeachingCriteria",
     }:
         raise AgentError("AI_TOOL_NOT_FOUND", "Tool is not allowlisted", 404)

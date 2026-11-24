@@ -30,6 +30,8 @@ _TOOL_MODULE_MAP = {
     "deleteFairCategory": "category",
     "listFairCategories": "category",
     "listFairCategoryRubrics": "category",
+    "getFairRubric": "category",
+    "setup_category_with_rubric": "category",
     # Stand
     "createFairStand": "stand",
     "updateFairStand": "stand",

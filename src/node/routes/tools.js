@@ -10,13 +10,15 @@ import { fairActionScopeKey, operationDigest, validateWriteProposal, preserveUpl
 const tools = new Set([
   'getSiteOverview', 'getSiteFairs', 'getSiteProjects', 'getSiteStands', 'getSiteResults',
   'listTeachingCriteria', 'createTeachingCriterion', 'updateTeachingCriterion', 'toggleTeachingCriterion', 'deleteTeachingCriterion',
-  'listFairCategories', 'listFairCategoryRubrics', 'createFairRubric', 'addFairRubricCriterion',
-  'createCategoryFairRubric', 'addCategoryFairRubricCriterion', 'createFair', 'updateFair', 'changeFairStatus',
+  'listFairCategories', 'listFairCategoryRubrics', 'getFairRubric', 'createFairRubric', 'addFairRubricCriterion',
+  'createCategoryFairRubric', 'addCategoryFairRubricCriterion', 'setup_category_with_rubric',
+  'createFair', 'updateFair', 'changeFairStatus',
   'listFairStands', 'createFairStand', 'updateFairStand', 'deleteFairStand',
 ]);
 
 const writeTools = new Set([
   'createFair', 'createFairRubric', 'addFairRubricCriterion', 'createCategoryFairRubric', 'addCategoryFairRubricCriterion',
+  'setup_category_with_rubric',
   'createTeachingCriterion', 'updateTeachingCriterion', 'toggleTeachingCriterion', 'deleteTeachingCriterion',
   'updateFair', 'changeFairStatus', 'createFairStand', 'updateFairStand', 'deleteFairStand',
 ]);

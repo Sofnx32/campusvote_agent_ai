@@ -3,7 +3,7 @@
 El registro de herramientas, sus permisos y la validación global del parser no
 se modifican: este módulo solo decide qué subconjunto de ``TOOLS`` se anuncia
 en ``payload["tools"]``. El default es el registro completo, por lo que
-cualquier señal ambigua conserva las 23 herramientas.
+cualquier señal ambigua conserva todas las herramientas del registro.
 """
 
 from __future__ import annotations
@@ -13,6 +13,17 @@ import unicodedata
 
 from .tool_registry import TOOLS
 
+# Conjunto mínimo que el prompt de categorías/rúbricas exige para resolver una
+# feria DRAFT y configurar sus categorías. Se reutiliza en los dominios que
+# mencionan categorías o rúbricas y en las afirmaciones con feria seleccionada.
+CATEGORY_RUBRIC_DOMAIN_TOOLS = frozenset({
+    "getSiteFairs",
+    "listFairCategories",
+    "getFairRubric",
+    "createFairCategory",
+    "setup_category_with_rubric",
+})
+
 # Dominios derivados del registro y del prompt existente. Las escrituras
 # incluyen siempre sus lecturas prerrequisito para no romper secuencias.
 _DOMAIN_RULES: tuple[tuple[tuple[str, ...], frozenset[str]], ...] = (
@@ -20,12 +31,14 @@ _DOMAIN_RULES: tuple[tuple[tuple[str, ...], frozenset[str]], ...] = (
         ("feria", "ferias", "stand", "rúbrica", "rubrica", "categoría", "categoria"),
         frozenset({
             "getSiteFairs", "getSiteOverview", "listFairCategories",
-            "listFairCategoryRubrics", "listFairStands",
+            "listFairCategoryRubrics", "getFairRubric", "listFairStands",
             "createFair", "updateFair", "changeFairStatus",
             "createFairRubric", "addFairRubricCriterion",
             "createCategoryFairRubric", "addCategoryFairRubricCriterion",
+            "createFairCategory", "updateFairCategory", "deleteFairCategory",
+            "setup_category_with_rubric",
             "createFairStand", "updateFairStand", "deleteFairStand",
-        }),
+        }) | CATEGORY_RUBRIC_DOMAIN_TOOLS,
     ),
     (
         ("proyecto", "proyectos", "resultado", "resultados", "ranking", "estadística", "estadistica"),
@@ -35,11 +48,12 @@ _DOMAIN_RULES: tuple[tuple[tuple[str, ...], frozenset[str]], ...] = (
         ("criterio", "criterios", "docente", "evaluación", "evaluacion", "rúbrica", "rubrica"),
         frozenset({
             "listTeachingCriteria", "listFairCategories", "listFairCategoryRubrics",
+            "getFairRubric", "createFairCategory", "setup_category_with_rubric",
             "createTeachingCriterion", "updateTeachingCriterion",
             "toggleTeachingCriterion", "deleteTeachingCriterion",
             "createFairRubric", "addFairRubricCriterion",
             "createCategoryFairRubric", "addCategoryFairRubricCriterion",
-        }),
+        }) | CATEGORY_RUBRIC_DOMAIN_TOOLS,
     ),
 )
 
@@ -185,8 +199,11 @@ def select_tool_names(
     - ``allow_tools=False`` → lista vacía (el proveedor no envía ``tools``).
     - Conversación general inequívoca → lista vacía (respuesta directa).
     - Dominio reconocido → unión de ese dominio y herramientas del historial.
-    - Respuesta afirmativa con feria seleccionada → asegurar ``listFairCategories``.
-    - Cualquier otra situación → las 23 herramientas del registro.
+    - Respuesta afirmativa con feria seleccionada → asegurar el conjunto mínimo
+      de categorías/rúbricas del prompt (``CATEGORY_RUBRIC_DOMAIN_TOOLS``).
+    - Cualquier otra situación → el registro completo.
+    - ``context["force_tool_names"]`` → herramientas adicionales solicitadas
+      por la capa de recuperación del agente.
     """
     if not allow_tools:
         return []
@@ -210,14 +227,19 @@ def select_tool_names(
                 selected |= set(names)
                 break
     # Si el usuario responde afirmativamente y hay una feria seleccionada,
-    # asegurar que listFairCategories esté disponible para listar categorías.
+    # anunciar de una vez todas las herramientas que el prompt de
+    # categorías/rúbricas exige, evitando TOOL_NOT_ALLOWED en la misma cadena.
     if not matched and _is_affirmative(_normalize_utterance(message)) and _has_selected_fair(context):
         matched = True
-        selected.add("listFairCategories")
-    # Sin dominio reconocido, la ambigüedad conserva las 23 herramientas;
+        selected |= CATEGORY_RUBRIC_DOMAIN_TOOLS
+    # Sin dominio reconocido, la ambigüedad conserva el registro completo;
     # el historial solo afina cuando además hay una intención de dominio clara.
     if not matched:
         return list(TOOLS)
     selected |= _history_tool_names(messages)
+    # La recuperación del agente puede ampliar el anuncio del ciclo actual.
+    forced = context.get("force_tool_names") or ()
+    if isinstance(forced, (list, tuple, set, frozenset)):
+        selected |= {name for name in forced if isinstance(name, str)}
     # Orden canónico del registro; nunca se agrega ni se elimina del universo.
     return [name for name in TOOLS if name in selected]

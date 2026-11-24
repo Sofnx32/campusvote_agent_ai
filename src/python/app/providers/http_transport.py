@@ -11,6 +11,7 @@ import httpx
 from ..errors import AgentError
 from ..models import LLMResult
 from ..forensic import (
+    log_llm_invalid_response,
     log_llm_request_started,
     log_llm_request_completed,
     log_llm_request_failed,
@@ -34,7 +35,11 @@ def _http_error(
     )
 
 
-def _map_http_status(status: int, retry_after: float | None) -> AgentError:
+def _map_http_status(
+    status: int,
+    retry_after: float | None,
+    allowed_tools: FrozenSet[str] | None = None,
+) -> AgentError:
     details = {"retry_after_seconds": retry_after} if retry_after is not None else None
     if status in (401, 403):
         return _http_error("PROVIDER_AUTH_FAILED", 502, status, False, details)
@@ -45,6 +50,12 @@ def _map_http_status(status: int, retry_after: float | None) -> AgentError:
     if status in (500, 502, 503, 504):
         return _http_error("PROVIDER_UNAVAILABLE", 503, status, True, details)
     if status in NON_RETRYABLE_HTTP_STATUSES:
+        log_llm_invalid_response(
+            "finish_reason",
+            selected_tool_names=sorted(allowed_tools or ()),
+            origin_status=status,
+            detail="non_retryable_http_status",
+        )
         return _http_error("LLM_INVALID_RESPONSE", 502, status, False, details)
     return _http_error(
         "PROVIDER_UNAVAILABLE", 503, status,
@@ -79,6 +90,7 @@ async def send_once(
                 raise _map_http_status(
                     response.status_code,
                     parse_retry_after(response.headers.get("retry-after")),
+                    allowed_tools,
                 )
             body = response.json()
         return parse_response(
@@ -102,6 +114,11 @@ async def send_once(
         ) from error
     except (KeyError, IndexError, TypeError, ValueError, json.JSONDecodeError) as error:
         emit_event("warning", "llm_provider_error", model=model, cause="invalid_response")
+        log_llm_invalid_response(
+            "invalid_tool_json",
+            selected_tool_names=sorted(allowed_tools),
+            detail=type(error).__name__,
+        )
         raise AgentError(
             "LLM_INVALID_RESPONSE", "LLM provider returned an invalid response", 502, False,
             details={"reason": type(error).__name__},

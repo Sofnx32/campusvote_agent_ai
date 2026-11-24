@@ -46,6 +46,7 @@ const writeFields = {
   addFairRubricCriterion: { fields: ['fair_id', 'name', 'description', 'min_score', 'max_score', 'position'], required: ['fair_id', 'name', 'min_score', 'max_score'] },
   createCategoryFairRubric: { fields: ['fair_id', 'category_id', 'name', 'description'], required: ['fair_id', 'category_id', 'name'] },
   addCategoryFairRubricCriterion: { fields: ['fair_id', 'category_id', 'name', 'description', 'points', 'position'], required: ['fair_id', 'category_id', 'name', 'points'] },
+  setup_category_with_rubric: { fields: ['fair_id', 'category_name', 'category_description', 'rubric_name', 'rubric_description', 'criteria'], required: ['fair_id', 'category_name', 'rubric_name', 'criteria'] },
   updateFair: { fields: ['fair_id', 'name', 'description', 'starts_at', 'ends_at'], required: ['fair_id'] },
   changeFairStatus: { fields: ['fair_id', 'status'], required: ['fair_id', 'status'] },
   createFairStand: { fields: ['fair_id', 'code', 'description'], required: ['fair_id', 'code'] },

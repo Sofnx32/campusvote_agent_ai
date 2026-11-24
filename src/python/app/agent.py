@@ -13,10 +13,15 @@ from .models import LLMResult, ToolCall
 from .observability import current_metrics, request_id_context
 from .conversation_memory import TurnContext
 from .decision_layer import Decision
+from .deterministic_responses import build_deterministic_response
 from .providers.tool_registry import TOOLS
-from .providers.tool_selector import select_tool_names
+from .providers.tool_selector import (
+    CATEGORY_RUBRIC_DOMAIN_TOOLS,
+    select_tool_names,
+)
 from .config import settings
 from .forensic import (
+    log_llm_invalid_response,
     log_tool_selection_completed,
     log_tool_validation_started,
     log_tool_validation_passed,
@@ -29,6 +34,29 @@ from .forensic import (
 
 logger = logging.getLogger(__name__)
 MAX_CORRECTABLE_FAILURES = 2
+
+# Errores que pueden significar "no hubo texto final" y que, cuando ya se
+# ejecutó una lectura con éxito, se sustituyen por una respuesta determinista.
+RECOVERABLE_LLM_ERROR_CODES = frozenset({
+    "AI_RESPONSE_INVALID",
+    "LLM_INVALID_RESPONSE",
+    "LLM_OUTPUT_TOKEN_LIMIT",
+})
+
+# Herramientas del dominio categorías/rúbricas cuya invocación no debe romper
+# el turno aunque el selector no las haya anunciado en este ciclo.
+RECOVERABLE_DOMAIN_TOOLS = CATEGORY_RUBRIC_DOMAIN_TOOLS | frozenset({
+    "listFairCategoryRubrics",
+    "updateFairCategory",
+    "deleteFairCategory",
+})
+
+
+def _invalid_response_reason(error: AgentError, has_tool_results: bool) -> str:
+    """Clasifica el error en el vocabulario cerrado de razones forenses."""
+    if error.code == "LLM_OUTPUT_TOKEN_LIMIT":
+        return "finish_reason"
+    return "empty_content_after_tools" if has_tool_results else "empty_content_no_tools"
 
 
 def _normalize_history(history: list[dict]) -> list[dict]:
@@ -188,13 +216,48 @@ async def run_agent_turn(
     if decision is not None:
         effective_context["decision"] = decision.to_dict()
     results: list[dict] = []
+    executed_tool_names: list[str] = []
     messages: list[dict] = [*recent_history, {"role": "user", "content": message}]
     executed = 0
     correctable_failures = 0
+    recovery_used = False
     started = clock()
     # Un solo anclaje: nunca se reinicia entre rondas LLM ni herramientas.
     ends = deadline_at if deadline_at is not None else started + deadline_seconds
     pass_remaining = _accepts_remaining_seconds(execute_tool)
+
+    async def _call_provider(announce_tools: bool) -> LLMResult:
+        """Llama al proveedor y recupera respuestas vacías con evidencia previa."""
+        try:
+            return await wait_for(
+                provider.complete(effective_context, messages, allow_tools=announce_tools),
+                max(ends - clock(), 0.001),
+            )
+        except (asyncio.TimeoutError, TimeoutError) as error:
+            raise AgentError(
+                "AI_DEADLINE_EXCEEDED", "LLM call exceeded remaining global budget",
+                504, True,
+            ) from error
+        except AgentError as error:
+            announced = select_tool_names(effective_context, messages, announce_tools) if announce_tools else []
+            reason = _invalid_response_reason(error, bool(results))
+            if error.code in RECOVERABLE_LLM_ERROR_CODES and results:
+                text = build_deterministic_response(results, executed_tool_names, effective_context)
+                if text:
+                    log_llm_invalid_response(
+                        reason,
+                        selected_tool_names=announced,
+                        error_code=error.code,
+                        outcome="recovered",
+                    )
+                    return LLMResult(content=text, allowed_tools=frozenset())
+            log_llm_invalid_response(
+                reason,
+                selected_tool_names=announced,
+                error_code=error.code,
+            )
+            raise
+
     while True:
         remaining_global = ends - clock()
         if remaining_global <= 0:
@@ -204,16 +267,7 @@ async def run_agent_turn(
         allow_tools = executed < max_tool_calls
         if decision is not None:
             allow_tools = decision.allow_tools and allow_tools
-        try:
-            current = await wait_for(
-                provider.complete(effective_context, messages, allow_tools=allow_tools),
-                remaining_global,
-            )
-        except (asyncio.TimeoutError, TimeoutError) as error:
-            raise AgentError(
-                "AI_DEADLINE_EXCEEDED", "LLM call exceeded remaining global budget",
-                504, True,
-            ) from error
+        current = await _call_provider(allow_tools)
         if not current.tool_calls:
             break
         remaining = max_tool_calls - executed
@@ -225,7 +279,35 @@ async def run_agent_turn(
         # current.allowed_tools es la allowlist inmutable del ciclo LLM actual
         cycle_allowed = current.allowed_tools if isinstance(current.allowed_tools, frozenset) else frozenset()
         decision_allow = decision.allow_tools if decision else True
-        
+
+        # Recuperación: el modelo puede pedir una herramienta válida del dominio
+        # que el selector no anunció. En lugar de reventar con TOOL_NOT_ALLOWED,
+        # se amplía el anuncio y se reintenta una sola vez.
+        unselected = [
+            call.name for call in calls
+            if call.name in RECOVERABLE_DOMAIN_TOOLS
+            and (not cycle_allowed or call.name not in cycle_allowed)
+        ]
+        # Solo se recupera si hubo un anuncio filtrado por dominio: cuando no se
+        # anunció ninguna herramienta (conversación general / allow_tools=False)
+        # el rechazo estricto TOOL_NOT_ALLOWED se mantiene intacto.
+        if cycle_allowed and unselected and not recovery_used and decision_allow:
+            recovery_used = True
+            log_llm_invalid_response(
+                f"unselected_tool:{unselected[0]}",
+                selected_tool_names=sorted(cycle_allowed),
+                error_code="LLM_INVALID_RESPONSE",
+                outcome="recovered",
+            )
+            effective_context["force_tool_names"] = sorted(
+                cycle_allowed | RECOVERABLE_DOMAIN_TOOLS
+            )
+            current = await _call_provider(True)
+            cycle_allowed = current.allowed_tools if isinstance(current.allowed_tools, frozenset) else frozenset()
+            calls = current.tool_calls[:remaining]
+            if not calls:
+                break
+
         # E. Selección de herramientas (log)
         if calls:
             log_tool_selection_completed(
@@ -364,6 +446,7 @@ async def run_agent_turn(
                     metrics.tool_latency_ms += (clock() - tool_started) * 1000
             executed += 1
             results.append(result)
+            executed_tool_names.append(call.name)
             messages.append({
                 "role": "tool",
                 "tool_call_id": call.id,

@@ -13,7 +13,7 @@ from typing import FrozenSet
 from ..errors import AgentError
 from ..models import LLMResult, ToolCall
 from ..observability import current_metrics
-from ..forensic import log_tool_validation_rejected
+from ..forensic import log_llm_invalid_response, log_tool_validation_rejected
 from .telemetry import emit_event
 from .tool_registry import TOOLS
 
@@ -60,6 +60,13 @@ def _tool_calls_from(
             try:
                 arguments = json.loads(arguments) if arguments.strip() else {}
             except json.JSONDecodeError as error:
+                log_llm_invalid_response(
+                    "invalid_tool_json",
+                    selected_tool_names=sorted(allowed_tools),
+                    error_code="AI_RESPONSE_INVALID",
+                    tool=name,
+                    model=model,
+                )
                 raise AgentError(
                     "AI_RESPONSE_INVALID", "LLM returned invalid tool arguments", 502,
                     details={"reason": "INVALID_TOOL_ARGUMENTS_JSON"},
@@ -67,6 +74,13 @@ def _tool_calls_from(
         if arguments is None:
             arguments = {}
         if not isinstance(arguments, dict):
+            log_llm_invalid_response(
+                "invalid_tool_json",
+                selected_tool_names=sorted(allowed_tools),
+                error_code="AI_RESPONSE_INVALID",
+                tool=name,
+                model=model,
+            )
             raise AgentError("AI_RESPONSE_INVALID", "LLM returned invalid tool arguments", 502)
         parsed.append(
             ToolCall(
@@ -119,6 +133,13 @@ def parse_response(
         metrics = current_metrics()
         if metrics:
             metrics.truncated_responses += 1
+        log_llm_invalid_response(
+            "finish_reason",
+            selected_tool_names=sorted(allowed_tools),
+            error_code="LLM_OUTPUT_TOKEN_LIMIT",
+            model=model,
+            finish_reason="length",
+        )
         raise AgentError(
             "LLM_OUTPUT_TOKEN_LIMIT",
             "LLM output was truncated by the token limit",
@@ -140,6 +161,14 @@ def parse_response(
     elif content.strip():
         result = LLMResult(content=content, allowed_tools=allowed_tools)
     else:
+        reason = "empty_content_after_tools" if allowed_tools else "empty_content_no_tools"
+        log_llm_invalid_response(
+            reason,
+            selected_tool_names=sorted(allowed_tools),
+            error_code="AI_RESPONSE_INVALID",
+            model=model,
+            finish_reason=choice.get("finish_reason"),
+        )
         raise AgentError("AI_RESPONSE_INVALID", "LLM returned no content", 502)
 
     result.usage = {
