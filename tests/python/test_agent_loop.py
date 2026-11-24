@@ -4,6 +4,8 @@ import json
 import pytest
 
 from app.agent import run_agent_turn
+from app.decision_layer import Decision, DecisionCategory
+from app.deterministic_responses import FALLBACK_NO_TOOLS_TEXT
 from app.errors import AgentError
 from app.models import LLMResult, ToolCall
 
@@ -18,7 +20,10 @@ class ScriptedProvider:
             "allow_tools": allow_tools,
             "messages": [dict(message) for message in messages],
         })
-        return self.results.pop(0)
+        item = self.results.pop(0)
+        if isinstance(item, BaseException):
+            raise item
+        return item
 
 
 def run(coro):
@@ -86,6 +91,74 @@ def test_loop_forces_a_final_text_answer_after_the_tool_budget():
     assert result.content == "Resumen final."
     assert executed == ["getSiteFairs"]
     assert [call["allow_tools"] for call in provider.calls] == [True, False]
+
+
+def _tool_choice_error():
+    return AgentError(
+        "LLM_INVALID_RESPONSE",
+        "LLM provider request failed",
+        502,
+        False,
+        details={
+            "origin_status": 400,
+            "upstream_error": "Tool choice is none, but model called a tool",
+        },
+    )
+
+
+def test_tool_choice_none_after_tools_returns_deterministic_text():
+    """El 400 del proveedor en el cierre no se convierte en LLM_INVALID_RESPONSE."""
+    allowed = frozenset({"getSiteFairs"})
+    provider = ScriptedProvider([
+        LLMResult(tool_calls=[ToolCall(id="call-1", name="getSiteFairs", arguments={})], allowed_tools=allowed),
+        _tool_choice_error(),
+    ])
+
+    async def execute(tool_call, context, message):
+        return {
+            "success": True,
+            "data": {"fairs": [{"name": "Feria de ciencias", "status": "DRAFT"}]},
+        }
+
+    result, results = run(run_agent_turn(
+        provider,
+        {"site_id": "site-a"},
+        "muestra las ferias",
+        [],
+        execute,
+        max_tool_calls=1,
+    ))
+
+    assert "Feria de ciencias" in result.content
+    assert len(results) == 1
+    assert [call["allow_tools"] for call in provider.calls] == [True, False]
+
+
+def test_tool_choice_none_without_evidence_returns_clean_text():
+    """Sin resultados ejecutados se devuelve texto limpio, nunca un error público."""
+    provider = ScriptedProvider([_tool_choice_error()])
+    decision = Decision(
+        category=DecisionCategory.GENERAL_QUESTION,
+        reason="general_utterance",
+        allow_tools=False,
+    )
+
+    async def execute(tool_call, context, message):
+        raise AssertionError("no se debe ejecutar ninguna herramienta")
+
+    result, results = run(run_agent_turn(
+        provider,
+        {"site_id": "site-a"},
+        "hola",
+        [],
+        execute,
+        max_tool_calls=5,
+        decision=decision,
+    ))
+
+    assert result.content == FALLBACK_NO_TOOLS_TEXT
+    assert results == []
+    assert provider.calls[0]["allow_tools"] is False
 
 
 def test_loop_stops_when_the_deadline_is_exceeded():

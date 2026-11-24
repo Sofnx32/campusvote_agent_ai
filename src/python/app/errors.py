@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 
 class AgentError(Exception):
     def __init__(
@@ -105,6 +107,34 @@ PUBLIC_MESSAGES = {
     "TOOL_LIMIT_EXCEEDED": "Se ha superado el límite de herramientas por turno.",
     "INVALID_TOOL_CALL": "La llamada a herramienta tiene una estructura inválida.",
 }
+
+
+_TOOL_CHOICE_NONE_RE = re.compile(
+    r"(?i)tool[\s_-]?choice\s*(?:is|:|=)?\s*['\"]?none['\"]?"
+)
+_CALLED_TOOL_RE = re.compile(
+    r"(?i)(?:called|calling|invoked|requested|tried to call)\s+(?:a\s+)?(?:tool|function)"
+)
+
+
+def is_tool_choice_none_error(error: AgentError) -> bool:
+    """Detecta el 400 del proveedor cuando el modelo intentó usar una tool.
+
+    El texto llega en ``details.upstream_error`` (por ejemplo:
+    ``"Tool choice is none, but model called a tool"``). Se clasifica por su
+    contenido, no por el status HTTP, porque el proveedor lo reporta como 400.
+    """
+    if error.code not in {"LLM_INVALID_RESPONSE", "AI_RESPONSE_INVALID"}:
+        return False
+    parts: list[str] = [error.message or ""]
+    details = error.details
+    if isinstance(details, dict):
+        for key in ("upstream_error", "detail", "message"):
+            value = details.get(key)
+            if isinstance(value, str):
+                parts.append(value)
+    text = " ".join(parts)
+    return bool(_TOOL_CHOICE_NONE_RE.search(text) and _CALLED_TOOL_RE.search(text))
 
 
 def error_payload(error: AgentError, correlation_id: str | None) -> dict:

@@ -65,3 +65,12 @@ Errores de respuesta LLM
   - Antes de cada llamada se valida el payload: `tools` sin `response_format`,
     esquemas con items en arrays, mensajes role/content/tool_call_id estrictos
     (assistant con tool_calls usa content=null; tool no incluye `name`).
+  - AI_MAX_TOOL_CALLS por defecto es 6 (Node y Python) para que lectura +
+    escritura (getSiteFairs -> setup_category_with_rubric) no agote el
+    presupuesto a mitad del turno.
+  - Cuando no se anuncian schemas (ciclo final,Decision sin tools o conversacion
+    general), el system prompt indica explicitamente que no se invoquen
+    funciones y que se responda solo con texto. Si el proveedor aun responde
+    "Tool choice is none, but model called a tool", se recupera con texto
+    determinista o limpio y se registra tool_choice_none_recovered en forense;
+    nunca se devuelve LLM_INVALID_RESPONSE por ese caso.

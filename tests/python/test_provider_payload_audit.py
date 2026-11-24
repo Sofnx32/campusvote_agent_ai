@@ -49,6 +49,26 @@ def test_payload_never_mixes_response_format_with_tools(monkeypatch):
     assert "response_format" not in payload
     assert "tools" in payload
     assert payload["tool_choice"] == "auto"
+    assert "MODO RESPUESTA FINAL" not in payload["messages"][0]["content"]
+
+
+def test_no_tools_cycle_forbids_tool_calls_in_the_system_prompt(monkeypatch):
+    """El ciclo final deja claro al modelo que debe responder solo texto."""
+    captured = []
+    Provider, _ = make_provider(monkeypatch, response=MockResponse(), captured=captured)
+    run(Provider().complete(CONTEXT, MESSAGES, allow_tools=False))
+    payload = captured[0]["json"]
+    system = payload["messages"][0]["content"]
+    assert "tools" not in payload
+    assert "NO debes invocar ninguna función ni herramienta" in system
+    assert "Responde únicamente con texto" in system
+
+
+def test_default_tool_budget_allows_a_read_then_a_write():
+    """Un flujo lectura + escritura no debe agotar el presupuesto por defecto."""
+    from app.config import settings as configured
+
+    assert configured.max_tool_calls >= 5
 
 
 def _valid_tool_payload():

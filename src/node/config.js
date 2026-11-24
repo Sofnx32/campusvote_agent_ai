@@ -44,7 +44,7 @@ export const config = Object.freeze({
   jtiTtlSeconds: Number(process.env.AI_JTI_STATE_TTL_SECONDS || 120),
   chatTimeoutMs: Number(process.env.AI_CHAT_TIMEOUT_MS || 60000),
   toolTimeoutMs: Number(process.env.AI_TOOL_TIMEOUT_MS || 20000),
-  maxToolCalls: Number(process.env.AI_MAX_TOOL_CALLS || 5),
+  maxToolCalls: Number(process.env.AI_MAX_TOOL_CALLS || 6),
   maxToolBytes: Number(process.env.AI_TOOL_AGGREGATE_MAX_BYTES || 524288),
   redisUrl: process.env.REDIS_URL || '',
   allowInMemoryReplay: process.env.ALLOW_IN_MEMORY_REPLAY === 'true',

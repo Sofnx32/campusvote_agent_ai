@@ -26,8 +26,16 @@ def site_instructions(context: dict) -> str:
     return " ".join(parts)
 
 
-def system_prompt(context: dict) -> str:
-    return (
+def system_prompt(context: dict, *, allow_tools: bool = True) -> str:
+    """Prompt del sistema.
+
+    ``allow_tools=False`` se usa en el ciclo final (presupuesto agotado o
+    Decision Layer sin herramientas). En ese caso las reglas generales que
+    piden usar herramientas contradicen la petición real al proveedor y
+    provocan el error ``Tool choice is none, but model called a tool``.
+    Por eso se añade una instrucción final explícita de "solo texto".
+    """
+    base = (
         "Eres CampusVote, un asistente conversacional inteligente de la sede activa. "
         "Habla siempre en el idioma del usuario. Utiliza español natural, con "
         "acentos, tildes, eñes y puntuación correcta. Mantén un tono humano, "
@@ -191,4 +199,15 @@ def system_prompt(context: dict) -> str:
         f"{_load_category_rubric_prompt()}\n\n"
 
         f"{site_instructions(context)}"
+    )
+    if allow_tools:
+        return base
+    return (
+        base
+        + "\n\n--- MODO RESPUESTA FINAL: SOLO TEXTO, SIN HERRAMIENTAS ---\n"
+        + "En este turno NO debes invocar ninguna función ni herramienta, "
+        "aunque las reglas anteriores mencionen su uso. No envíes tool_calls. "
+        "Responde únicamente con texto dirigido al usuario, usando la "
+        "información ya obtenida en los pasos anteriores. Si ya se presentó "
+        "una propuesta, indícalo con palabras sencillas y no repitas la operación.\n"
     )

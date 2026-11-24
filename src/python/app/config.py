@@ -67,7 +67,10 @@ class Settings:
     llm_retry_max_delay_seconds: float = field(default_factory=lambda: float(os.getenv("LLM_RETRY_MAX_DELAY_SECONDS", "10.0")))
     # Minimum time reserved to actually perform the next attempt after a backoff.
     llm_retry_min_next_attempt_seconds: float = field(default_factory=lambda: float(os.getenv("LLM_RETRY_MIN_NEXT_ATTEMPT_SECONDS", "0.5")))
-    max_tool_calls: int = field(default_factory=lambda: int(os.getenv("AI_MAX_TOOL_CALLS", "5")))
+    # Un flujo normal de lectura + escritura (p. ej. getSiteFairs ->
+    # setup_category_with_rubric) necesita varias rondas: suficiente margen
+    # para que no se fuerce la respuesta final a mitad de camino.
+    max_tool_calls: int = field(default_factory=lambda: int(os.getenv("AI_MAX_TOOL_CALLS", "6")))
     # Cold starts de Render: 55s por debajo del timeout HTTP de Node (60s) y
     # del TTL del JWT de contexto (90s). Máximos permitidos: 60s y 65s/90s.
     # El timeout de herramienta baja a 20s para que 1 intento + 1 retry

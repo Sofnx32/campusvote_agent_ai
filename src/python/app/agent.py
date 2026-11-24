@@ -8,12 +8,15 @@ import time
 from collections.abc import Awaitable, Callable
 from typing import FrozenSet
 
-from .errors import AgentError, CORRECTABLE_CODES
+from .errors import AgentError, CORRECTABLE_CODES, is_tool_choice_none_error
 from .models import LLMResult, ToolCall
 from .observability import current_metrics, request_id_context
 from .conversation_memory import TurnContext
 from .decision_layer import Decision
-from .deterministic_responses import build_deterministic_response
+from .deterministic_responses import (
+    build_deterministic_response,
+    build_no_tools_fallback,
+)
 from .providers.tool_registry import TOOLS
 from .providers.tool_selector import (
     CATEGORY_RUBRIC_DOMAIN_TOOLS,
@@ -259,8 +262,14 @@ async def run_agent_turn(
     ends = deadline_at if deadline_at is not None else started + deadline_seconds
     pass_remaining = _accepts_remaining_seconds(execute_tool)
 
+    # El proveedor puede rechazar el ciclo final con 400 si el modelo ignoró
+    # la instrucción "solo texto". Se permite un único reintento con tools
+    # anunciadas cuando todavía no se ejecutó ninguna herramienta.
+    tool_choice_retry_used = False
+
     async def _call_provider(announce_tools: bool) -> LLMResult:
-        """Llama al proveedor y recupera respuestas vacías con evidencia previa."""
+        """Llama al proveedor y recupera respuestas inválidas sin romper el turno."""
+        nonlocal tool_choice_retry_used
         try:
             return await wait_for(
                 provider.complete(effective_context, messages, allow_tools=announce_tools),
@@ -273,6 +282,58 @@ async def run_agent_turn(
             ) from error
         except AgentError as error:
             announced = select_tool_names(effective_context, messages, announce_tools) if announce_tools else []
+            upstream_error = error.details.get("upstream_error") if isinstance(error.details, dict) else None
+
+            if is_tool_choice_none_error(error):
+                # Ya hay evidencia del turno: responder con texto determinista
+                # o con un mensaje limpio, nunca con LLM_INVALID_RESPONSE.
+                if results:
+                    text = build_no_tools_fallback(
+                        results, executed_tool_names, effective_context,
+                    )
+                    log_llm_invalid_response(
+                        "tool_choice_none_recovered",
+                        selected_tool_names=announced,
+                        error_code=error.code,
+                        outcome="recovered",
+                        upstream_error=upstream_error,
+                    )
+                    return LLMResult(content=text, allowed_tools=frozenset())
+
+                decision_allows = decision is None or decision.allow_tools
+                retry_names = (
+                    select_tool_names(effective_context, messages, True)
+                    if decision_allows and executed < max_tool_calls and not tool_choice_retry_used
+                    else []
+                )
+                if retry_names:
+                    tool_choice_retry_used = True
+                    # El reintento debe anunciar schemas; el selector puede
+                    # haber devuelto [] en el ciclo que produjo el error.
+                    effective_context["force_tool_names"] = sorted(
+                        set(retry_names) | set(announced)
+                    )
+                    log_llm_invalid_response(
+                        "tool_choice_none_recovered",
+                        selected_tool_names=sorted(retry_names),
+                        error_code=error.code,
+                        outcome="retried_with_tools",
+                        upstream_error=upstream_error,
+                    )
+                    return await _call_provider(True)
+
+                log_llm_invalid_response(
+                    "tool_choice_none_recovered",
+                    selected_tool_names=announced,
+                    error_code=error.code,
+                    outcome="recovered_text",
+                    upstream_error=upstream_error,
+                )
+                return LLMResult(
+                    content=build_no_tools_fallback([], [], effective_context),
+                    allowed_tools=frozenset(),
+                )
+
             reason = _invalid_response_reason(error, bool(results))
             if error.code in RECOVERABLE_LLM_ERROR_CODES and results:
                 text = build_deterministic_response(results, executed_tool_names, effective_context)

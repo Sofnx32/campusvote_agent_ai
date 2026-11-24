@@ -512,6 +512,7 @@ LLM_INVALID_RESPONSE_REASONS = frozenset({
     "invalid_tool_json",
     "finish_reason",
     "invalid_provider_payload",
+    "tool_choice_none_recovered",
 })
 
 

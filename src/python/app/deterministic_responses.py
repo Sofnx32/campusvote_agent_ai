@@ -168,3 +168,39 @@ def build_deterministic_response(
         if tool_name in {"listFairCategoryRubrics", "getFairRubric"}:
             return _rubrics_response(items, fair_name)
     return None
+
+
+# Textos de último recurso cuando el proveedor se niega a redactar por un
+# conflicto de tool_choice. No inventan datos ni exponen identificadores.
+FALLBACK_NO_TOOLS_TEXT = (
+    "Ya tengo la información disponible, pero no pude redactar la respuesta "
+    "en este momento. ¿Podrías reformular tu solicitud?"
+)
+FALLBACK_CONFIRMATION_TEXT = (
+    "La propuesta quedó registrada y espera tu confirmación. "
+    "Revisa la tarjeta de operación para continuar."
+)
+
+
+def build_no_tools_fallback(
+    results: Sequence[Mapping] | None,
+    tool_names: Sequence[str] | None = None,
+    context: Mapping | None = None,
+) -> str:
+    """Respuesta limpia cuando no se pueden anunciar herramientas.
+
+    Primero aprovecha la evidencia de lecturas ya ejecutadas. Si la última
+    operación fue una propuesta pendiente de confirmación, lo comunica sin
+    repetir la escritura. Si no hay evidencia útil, devuelve un texto neutral.
+    """
+    text = build_deterministic_response(results, tool_names, context)
+    if text:
+        return text
+    for result in reversed(list(results or [])):
+        if not isinstance(result, Mapping) or result.get("success") is False:
+            continue
+        data = result.get("data")
+        status = data.get("status") if isinstance(data, Mapping) else None
+        if str(status or "").lower() == "confirmation_required":
+            return FALLBACK_CONFIRMATION_TEXT
+    return FALLBACK_NO_TOOLS_TEXT

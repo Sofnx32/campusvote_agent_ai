@@ -53,18 +53,29 @@ class OpenAICompatibleProvider(LLMProvider):
             raise AgentError("LLM_CONFIG_MISSING", "LLM provider configuration is incomplete", 503)
 
         param = resolve_output_token_param(settings.llm_output_token_param, settings.llm_model)
-        payload: dict = {
-            "model": settings.llm_model,
-            "messages": [{"role": "system", "content": system_prompt(context)}, *messages],
-        }
         tool_names: list[str] = []
         if allow_tools:
             tool_names = select_tool_names(context, messages, allow_tools)
-            if tool_names:
-                payload["tools"] = [
-                    {"type": "function", "function": tool_schema(name)} for name in tool_names
-                ]
-                payload["tool_choice"] = "auto"
+        # Si no se anuncian schemas (presupuesto agotado, decisión que
+        # desactiva herramientas o conversación general), el prompt debe
+        # prohibir explícitamente las llamadas a funciones: de lo contrario
+        # el modelo obedece las reglas generales y el proveedor responde
+        # HTTP 400 "Tool choice is none, but model called a tool".
+        payload: dict = {
+            "model": settings.llm_model,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": system_prompt(context, allow_tools=bool(tool_names)),
+                },
+                *messages,
+            ],
+        }
+        if tool_names:
+            payload["tools"] = [
+                {"type": "function", "function": tool_schema(name)} for name in tool_names
+            ]
+            payload["tool_choice"] = "auto"
         if settings.llm_max_output_tokens > 0:
             payload[param] = settings.llm_max_output_tokens
 
