@@ -59,3 +59,9 @@ Errores de respuesta LLM
     conserva error.details con reason, failure y tool (sin UUIDs ni secretos).
   - El parser limpia bloques ```json ... ``` y prosa alrededor del JSON antes
     de json.loads, y registra la recuperacion en campusvote.forensic.
+  - Un HTTP 400/422 del proveedor añade details.upstream_error con el primer
+    mensaje del body (500 caracteres, sin UUIDs ni secretos) junto a
+    origin_status.
+  - Antes de cada llamada se valida el payload: `tools` sin `response_format`,
+    esquemas con items en arrays, mensajes role/content/tool_call_id estrictos
+    (assistant con tool_calls usa content=null; tool no incluye `name`).

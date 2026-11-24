@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 from typing import FrozenSet
 
@@ -19,6 +20,63 @@ from ..forensic import (
 from .response_parser import parse_response
 from .retry_policy import NON_RETRYABLE_HTTP_STATUSES, RETRYABLE_HTTP_STATUSES, parse_retry_after
 from .telemetry import emit_event
+
+
+_UPSTREAM_UUID_RE = re.compile(
+    r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b"
+)
+_UPSTREAM_SECRET_RE = re.compile(
+    r"(?i)\b(api[_-]?key|authorization|bearer|token|secret|password|passwd|credential)\b\s*[:=]\s*[\"']?[^\s,;\"'}]+"
+)
+
+
+def _sanitize_upstream_text(value: object, limit: int = 500) -> str:
+    """Texto acotado y seguro para `details.upstream_error`.
+
+    `details` se expone al cliente, así que se eliminan UUIDs y posibles
+    secretos antes de incluir el mensaje crudo del proveedor.
+    """
+    if isinstance(value, str):
+        text = value
+    else:
+        try:
+            text = json.dumps(value, ensure_ascii=False, default=str)
+        except (TypeError, ValueError):
+            text = str(value)
+    text = _UPSTREAM_UUID_RE.sub("[uuid]", text)
+    text = _UPSTREAM_SECRET_RE.sub(r"\1=[redacted]", text)
+    return re.sub(r"\s+", " ", text).strip()[:limit]
+
+
+def _extract_upstream_error(response: object, limit: int = 500) -> str:
+    """Extrae el primer mensaje útil del body de una respuesta 4xx."""
+    body: object = None
+    try:
+        body = response.json()  # type: ignore[attr-defined]
+    except (AttributeError, TypeError, ValueError, json.JSONDecodeError):
+        body = None
+
+    if isinstance(body, dict):
+        for key in ("message", "msg", "detail", "error", "error_message"):
+            if key not in body:
+                continue
+            value = body[key]
+            if isinstance(value, dict):
+                for nested in ("message", "msg", "detail", "type", "code"):
+                    if nested in value:
+                        return _sanitize_upstream_text(value[nested], limit)
+                return _sanitize_upstream_text(value, limit)
+            if value is not None:
+                return _sanitize_upstream_text(value, limit)
+        if body:
+            return _sanitize_upstream_text(body, limit)
+    elif body is not None:
+        return _sanitize_upstream_text(body, limit)
+
+    text = getattr(response, "text", "")
+    if isinstance(text, str) and text.strip():
+        return _sanitize_upstream_text(text, limit)
+    return ""
 
 
 def _http_error(
@@ -39,8 +97,11 @@ def _map_http_status(
     status: int,
     retry_after: float | None,
     allowed_tools: FrozenSet[str] | None = None,
+    upstream_error: str = "",
 ) -> AgentError:
-    details = {"retry_after_seconds": retry_after} if retry_after is not None else None
+    details = {"retry_after_seconds": retry_after} if retry_after is not None else {}
+    if status in (400, 422):
+        details["upstream_error"] = upstream_error or "<sin cuerpo de error>"
     if status in (401, 403):
         return _http_error("PROVIDER_AUTH_FAILED", 502, status, False, details)
     if status == 404:
@@ -55,6 +116,7 @@ def _map_http_status(
             selected_tool_names=sorted(allowed_tools or ()),
             origin_status=status,
             detail="non_retryable_http_status",
+            upstream_error=details.get("upstream_error"),
         )
         return _http_error("LLM_INVALID_RESPONSE", 502, status, False, details)
     return _http_error(
@@ -91,6 +153,7 @@ async def send_once(
                     response.status_code,
                     parse_retry_after(response.headers.get("retry-after")),
                     allowed_tools,
+                    _extract_upstream_error(response),
                 )
             body = response.json()
         return parse_response(

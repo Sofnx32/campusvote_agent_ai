@@ -26,6 +26,7 @@ from ..prompts import system_prompt
 from .base import LLMProvider
 from .http_transport import send_once
 from .output_tokens import output_token_param as resolve_output_token_param
+from .payload_validation import validate_llm_payload
 from .retry_policy import (
     FALLBACK_ERROR_CODES,
     calculate_backoff,
@@ -66,6 +67,8 @@ class OpenAICompatibleProvider(LLMProvider):
                 payload["tool_choice"] = "auto"
         if settings.llm_max_output_tokens > 0:
             payload[param] = settings.llm_max_output_tokens
+
+        validate_llm_payload(payload)
 
         if settings.llm_total_budget_seconds <= settings.llm_fallback_budget_seconds:
             emit_event(

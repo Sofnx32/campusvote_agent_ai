@@ -58,6 +58,8 @@ def test_loop_sends_assistant_tool_calls_and_tool_results_in_order():
     assert second[-1]["tool_call_id"] == "call-2"
     assistant = next(message for message in second if message["role"] == "assistant" and message.get("tool_calls"))
     assert [call["id"] for call in assistant["tool_calls"]] == ["call-1", "call-2"]
+    assert assistant["content"] is None
+    assert set(second[-1]) == {"role", "content", "tool_call_id"}
 
 
 def test_loop_forces_a_final_text_answer_after_the_tool_budget():

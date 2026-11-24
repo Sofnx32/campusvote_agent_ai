@@ -60,21 +60,54 @@ def _invalid_response_reason(error: AgentError, has_tool_results: bool) -> str:
 
 
 def _normalize_history(history: list[dict]) -> list[dict]:
-    """Elimina solo mensajes vacíos y duplicados consecutivos exactos.
+    """Deja un historial compatible con la spec estricta de chat completions.
 
-    No resume, reescribe ni elimina información semántica: la ventana, el TTL y
-    el almacenamiento (``main.py``) permanecen intactos.
+    El store persistente guarda role/content, pero no los ``tool_calls`` que
+    originaron cada mensaje ``tool``. Reenviar esos mensajes huérfanos provoca
+    HTTP 400 en proveedores estrictos. Solo se conservan cuando el assistant
+    inmediatamente anterior todavía declara el ``tool_call_id``.
     """
     normalized: list[dict] = []
     for message in history:
-        content = message.get("content")
-        if not isinstance(content, str) or not content.strip():
+        if not isinstance(message, dict):
             continue
+        role = message.get("role")
+        if role not in {"system", "user", "assistant", "tool"}:
+            continue
+        content = message.get("content")
+
+        if role == "tool":
+            previous = normalized[-1] if normalized else None
+            previous_calls = previous.get("tool_calls") if previous else None
+            call_id = message.get("tool_call_id")
+            if (
+                isinstance(content, str) and content
+                and isinstance(call_id, str) and call_id
+                and previous and previous.get("role") == "assistant"
+                and isinstance(previous_calls, list)
+                and any(call.get("id") == call_id for call in previous_calls if isinstance(call, dict))
+            ):
+                normalized.append({
+                    "role": "tool", "content": content, "tool_call_id": call_id,
+                })
+            continue
+
+        cleaned = dict(message)
+        if role == "assistant":
+            calls = cleaned.get("tool_calls")
+            if isinstance(calls, list) and calls:
+                if not (isinstance(content, str) and content.strip()):
+                    cleaned["content"] = None
+            elif not isinstance(content, str) or not content.strip():
+                continue
+        elif not isinstance(content, str) or not content.strip():
+            continue
+
         if normalized:
             previous = normalized[-1]
-            if previous.get("role") == message.get("role") and previous.get("content") == content:
+            if previous.get("role") == cleaned.get("role") and previous.get("content") == cleaned.get("content"):
                 continue
-        normalized.append(message)
+        normalized.append(cleaned)
     return normalized
 
 
@@ -447,10 +480,11 @@ async def run_agent_turn(
             executed += 1
             results.append(result)
             executed_tool_names.append(call.name)
+            # Los mensajes `tool` de la spec solo admiten role/content/tool_call_id.
+            # `name` es un campo extra rechazado por proveedores estrictos.
             messages.append({
                 "role": "tool",
                 "tool_call_id": call.id,
-                "name": call.name,
                 "content": json.dumps(result, ensure_ascii=False),
             })
             if ends - clock() <= 0:

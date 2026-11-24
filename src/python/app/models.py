@@ -36,7 +36,13 @@ class LLMResult(BaseModel):
 
     def assistant_message(self) -> dict:
         """Build the assistant message that must precede tool results."""
-        message: dict = {"role": "assistant", "content": self.content or ""}
+        # La spec de OpenAI permite `content: null` cuando hay tool_calls;
+        # enviar "" es rechazado por proveedores estrictos (HTTP 400).
+        message: dict = {
+            "role": "assistant",
+            "content": (self.content if isinstance(self.content, str) and self.content.strip() else None)
+            if self.tool_calls else (self.content or ""),
+        }
         if self.tool_calls:
             message["tool_calls"] = [
                 {
