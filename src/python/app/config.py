@@ -71,8 +71,8 @@ class Settings:
     # Coherent with Node `chatTimeoutMs=25s` and AI Context JWT TTL `60s`:
     # 20s (agent) < 25s (Node HTTP) < 60s (JWT). Never raise this above the
     # Node timeout without raising `AI_CHAT_TIMEOUT_MS` in the same deploy.
-    agent_deadline_seconds: float = field(default_factory=lambda: float(os.getenv("AI_AGENT_DEADLINE_SECONDS", "20")))
-    tool_timeout_seconds: float = field(default_factory=lambda: float(os.getenv("AI_TOOL_TIMEOUT_SECONDS", "10")))
+    agent_deadline_seconds: float = field(default_factory=lambda: float(os.getenv("AI_AGENT_DEADLINE_SECONDS", "28")))
+    tool_timeout_seconds: float = field(default_factory=lambda: float(os.getenv("AI_TOOL_TIMEOUT_SECONDS", "25")))
     conversation_max_messages: int = field(default_factory=lambda: int(os.getenv("AI_CONVERSATION_MAX_MESSAGES", "20")))
     conversation_ttl_seconds: int = field(default_factory=lambda: int(os.getenv("AI_CONVERSATION_TTL_SECONDS", "1800")))
     max_history_messages: int = field(default_factory=lambda: int(os.getenv("AI_MAX_HISTORY_MESSAGES", "12")))
@@ -117,7 +117,7 @@ def deadline_chain(config: Settings | None = None) -> dict[str, float]:
     """
     cfg = config or settings
     context_ttl = float(os.getenv("AI_CONTEXT_TTL_SECONDS", "60"))
-    node_http = float(os.getenv("AI_CHAT_TIMEOUT_MS", "25000")) / 1000
+    node_http = float(os.getenv("AI_CHAT_TIMEOUT_MS", "30000")) / 1000
     return {
         "ai_context_jwt_ttl": context_ttl,
         "node_http_timeout": node_http,

@@ -258,13 +258,26 @@ async def health():
             await conversation_store.redis.ping()
         except Exception:
             raise HTTPException(status_code=503, detail={"success": False, "service": "campusvote-agent-python", "reason": "redis_unavailable", "backend": backend})
-    # Mask password in URL if present
+    # Mask password and host ID in URL if present
     redis_url = settings.redis_url
-    if redis_url and "@" in redis_url:
-        parts = redis_url.split("@")
-        masked = "redis://***@" + parts[-1]
+    if redis_url:
+        # Parse and mask sensitive parts: password and host ID
+        # Format: redis://[:password@]host:port
+        # Mask host ID: keep first 3 chars and last 3 chars, replace middle with ***
+        try:
+            from urllib.parse import urlparse
+            parsed = urlparse(redis_url)
+            host = parsed.hostname or ""
+            # Mask middle of host ID (Render internal host format: red-xxxxxxxxxxxx)
+            if len(host) > 8:
+                masked_host = host[:4] + "***" + host[-3:]
+            else:
+                masked_host = "***" + host[-3:]
+            masked = f"redis://{masked_host}:{parsed.port or 6379}"
+        except Exception:
+            masked = "redis://***:6379"
     else:
-        masked = redis_url or "not_configured"
+        masked = "not_configured"
     return {"success": True, "service": "campusvote-agent-python", "backend": backend, "redis_url": masked}
 
 

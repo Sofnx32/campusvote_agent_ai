@@ -97,7 +97,8 @@ def context():
 def test_absolute_deadline_single_clock_capture_and_config_cap(monkeypatch):
     _, main, _, settings, _, _, _ = _deps()
     seen = patch_clocks(monkeypatch, main, [500.0, 999.0])
-    assert main.absolute_deadline(iso(25)) == 500.0 + settings.agent_deadline_seconds
+    # remaining=25s, agent_deadline=28s -> min(28, 25) = 25s
+    assert main.absolute_deadline(iso(25)) == 500.0 + min(settings.agent_deadline_seconds, 25.0)
     assert len(seen) == 1
 
 

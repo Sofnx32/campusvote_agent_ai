@@ -31,7 +31,16 @@ const FAIR_SCOPED_TOOLS = new Set([
   'createFairStand', 'updateFairStand', 'deleteFairStand',
 ]);
 
+const READ_ONLY_TOOLS = new Set([
+  'getSiteOverview', 'getSiteFairs', 'getSiteProjects', 'getSiteStands', 'getSiteResults',
+  'listTeachingCriteria', 'listFairStands', 'listFairCategories', 'listFairCategoryRubrics',
+]);
+
 const FORBIDDEN_FIELDS = /"(?:(?:vote|votes|rubric|rubrics|score|scores|evaluation|evaluations|jury_user_id|user_id))"/i;
+
+const RETRYABLE_STATUS_CODES = new Set([502, 503, 504]);
+const MAX_RETRIES = 1;
+const RETRY_BACKOFF_MS = 1000;
 
 export class ToolExecutor {
   constructor(fetchImpl = fetch) {
@@ -87,53 +96,84 @@ export class ToolExecutor {
       );
     }
 
-    const response = await this.fetch(url, request);
-    if (!response.ok) {
-      const payload = await response.json().catch(() => ({}));
-      const backendError = payload?.error ?? {};
-      if (response.status >= 500) {
+    // Helper: sleep for backoff
+    const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+    // Determine if we should retry this tool call
+    const shouldRetry = (attempt, status) => {
+      return (
+        attempt < MAX_RETRIES &&
+        READ_ONLY_TOOLS.has(tool) &&
+        (RETRYABLE_STATUS_CODES.has(status) || status === 0) // 0 = network/timeout error
+      );
+    };
+
+    let response;
+    let attempt = 0;
+    while (true) {
+      attempt++;
+      try {
+        response = await this.fetch(url, request);
+      } catch (fetchError) {
+        // Network error (timeout, connection refused, etc.)
+        if (shouldRetry(attempt, 0)) {
+          await sleep(RETRY_BACKOFF_MS);
+          continue;
+        }
         throw new AgentError('AI_TOOL_UNAVAILABLE', `${tool} backend service unavailable`, 503, true);
       }
-      const code = response.status === 403
-        ? 'AI_SCOPE_FORBIDDEN'
-        : response.status === 404
-          ? 'AI_RESOURCE_NOT_FOUND'
-          : response.status === 409
-            ? 'AI_OPERATION_CONFLICT'
-            : response.status === 400
-              ? 'AI_INVALID_REQUEST'
-              : 'AI_BACKEND_REJECTED';
-      const backendMessage = typeof backendError.message === 'string' && backendError.message.trim()
-        ? backendError.message.trim().slice(0, 300)
-        : undefined;
-      const details = backendError.details && typeof backendError.details === 'object' ? backendError.details : undefined;
-      throw new AgentError(code, backendError.message || `${tool} was rejected by CampusVote`, response.status, false, {
-        ...(backendMessage && response.status < 500 ? { publicMessage: backendMessage } : {}),
-        ...(details ? { details } : {}),
-      });
-    }
 
-    const result = await readJsonResponse(response, 'campusvote');
-    const data = result.data ?? result;
-
-    if (config.requireScopedToolEnvelope && !isWriteTool && !directFairTool && !directAcademicTool) {
-      if (data.organization_id !== context.organization_id || data.site_id !== input.site_id) {
-        throw new AgentError('AI_TOOL_UNAVAILABLE', `${tool} does not provide a verified organization/site response envelope`, 503, true);
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({}));
+        const backendError = payload?.error ?? {};
+        if (response.status >= 500) {
+          if (shouldRetry(attempt, response.status)) {
+            await sleep(RETRY_BACKOFF_MS);
+            continue;
+          }
+          throw new AgentError('AI_TOOL_UNAVAILABLE', `${tool} backend service unavailable`, 503, true);
+        }
+        const code = response.status === 403
+          ? 'AI_SCOPE_FORBIDDEN'
+          : response.status === 404
+            ? 'AI_RESOURCE_NOT_FOUND'
+            : response.status === 409
+              ? 'AI_OPERATION_CONFLICT'
+              : response.status === 400
+                ? 'AI_INVALID_REQUEST'
+                : 'AI_BACKEND_REJECTED';
+        const backendMessage = typeof backendError.message === 'string' && backendError.message.trim()
+          ? backendError.message.trim().slice(0, 300)
+          : undefined;
+        const details = backendError.details && typeof backendError.details === 'object' ? backendError.details : undefined;
+        throw new AgentError(code, backendError.message || `${tool} was rejected by CampusVote`, response.status, false, {
+          ...(backendMessage && response.status < 500 ? { publicMessage: backendMessage } : {}),
+          ...(details ? { details } : {}),
+        });
       }
-    }
 
-    const serialized = JSON.stringify(data);
-    if (!isWriteTool && FORBIDDEN_FIELDS.test(serialized)) {
-      throw new AgentError('AI_RESPONSE_INVALID', 'CampusVote response contains individual protected data', 502);
-    }
+      const result = await readJsonResponse(response, 'campusvote');
+      const data = result.data ?? result;
 
-    const bytes = Buffer.byteLength(serialized);
-    if (bytes > config.maxToolBytes) {
-      throw new AgentError('AI_INVALID_REQUEST', 'Tool response exceeds aggregate data budget', 400);
-    }
+      if (config.requireScopedToolEnvelope && !isWriteTool && !directFairTool && !directAcademicTool) {
+        if (data.organization_id !== context.organization_id || data.site_id !== input.site_id) {
+          throw new AgentError('AI_TOOL_UNAVAILABLE', `${tool} does not provide a verified organization/site response envelope`, 503, true);
+        }
+      }
 
-    return data;
-  }
+      const serialized = JSON.stringify(data);
+      if (!isWriteTool && FORBIDDEN_FIELDS.test(serialized)) {
+        throw new AgentError('AI_RESPONSE_INVALID', 'CampusVote response contains individual protected data', 502);
+      }
+
+      const bytes = Buffer.byteLength(serialized);
+      if (bytes > config.maxToolBytes) {
+        throw new AgentError('AI_INVALID_REQUEST', 'Tool response exceeds aggregate data budget', 400);
+      }
+
+      return data;
+    }
+    }
 
   headers(context, userToken) {
     if (config.backendAuthMode !== 'user_jwt' || !userToken) {

@@ -93,7 +93,7 @@ def test_non_positive_node_timeout_is_rejected(monkeypatch, value):
 # Configuración rechazada: contradicciones entre presupuestos
 # ---------------------------------------------------------------------------
 
-@pytest.mark.parametrize("total,fallback", [(25, 5), (18, 18), (18, 19)])
+@pytest.mark.parametrize("total,fallback", [(30, 5), (30, 30), (29, 30)])
 def test_llm_budget_hierarchy_is_rejected(total, fallback):
     cfg = _config()
     with pytest.raises(cfg.ConfigurationError):
@@ -107,7 +107,7 @@ def test_llm_budget_hierarchy_is_rejected(total, fallback):
 def test_llm_budget_above_agent_deadline_is_rejected():
     cfg = _config()
     with pytest.raises(cfg.ConfigurationError, match="llm_total_budget must not exceed"):
-        cfg.validate_configuration(replace(cfg.settings, llm_total_budget_seconds=25))
+        cfg.validate_configuration(replace(cfg.settings, llm_total_budget_seconds=30))
 
 
 def test_primary_remaining_below_min_next_attempt_is_rejected():
@@ -129,7 +129,7 @@ def test_fallback_budget_below_min_next_attempt_is_rejected():
 def test_tool_timeout_above_agent_deadline_is_rejected():
     cfg = _config()
     with pytest.raises(cfg.ConfigurationError, match="tool_timeout must not exceed"):
-        cfg.validate_configuration(replace(cfg.settings, tool_timeout_seconds=21))
+        cfg.validate_configuration(replace(cfg.settings, tool_timeout_seconds=30))
 
 
 def test_llm_budget_plus_reserve_above_agent_deadline_is_rejected():
@@ -137,7 +137,7 @@ def test_llm_budget_plus_reserve_above_agent_deadline_is_rejected():
     with pytest.raises(cfg.ConfigurationError, match="llm_total_budget plus"):
         cfg.validate_configuration(replace(
             cfg.settings,
-            llm_total_budget_seconds=19.9,
+            llm_total_budget_seconds=28,
             llm_fallback_budget_seconds=1.0,
         ))
 
