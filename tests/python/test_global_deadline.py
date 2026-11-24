@@ -94,11 +94,22 @@ def context():
 # 1. Conversión monotónica absoluta sin deriva y sin ampliación
 # ---------------------------------------------------------------------------
 
+def test_default_deadlines_allow_render_cold_start():
+    _, _, _, settings, _, _, _ = _deps()
+    from app.config import deadline_chain
+
+    assert settings.agent_deadline_seconds == 55
+    assert settings.tool_timeout_seconds == 20
+    chain = deadline_chain()
+    assert chain["node_http_timeout"] == 60.0
+    assert chain["python_agent_deadline"] < chain["node_http_timeout"] < chain["ai_context_jwt_ttl"]
+
+
 def test_absolute_deadline_single_clock_capture_and_config_cap(monkeypatch):
     _, main, _, settings, _, _, _ = _deps()
     seen = patch_clocks(monkeypatch, main, [500.0, 999.0])
-    # remaining=25s, agent_deadline=28s -> min(28, 25) = 25s
-    assert main.absolute_deadline(iso(25)) == 500.0 + min(settings.agent_deadline_seconds, 25.0)
+    # remaining=70s, agent_deadline=55s -> min(55, 70) = 55s
+    assert main.absolute_deadline(iso(70)) == 500.0 + min(settings.agent_deadline_seconds, 70.0)
     assert len(seen) == 1
 
 
@@ -160,9 +171,9 @@ def test_first_llm_receives_full_remaining_budget():
     provider = ClockProvider([LLMResult(content="ok")], clock)
     asyncio.run(agent.run_agent_turn(
         provider, {}, "m", [], ToolSpy(clock),
-        max_tool_calls=5, deadline_at=1020.0, clock=clock, wait_for=wait,
+        max_tool_calls=5, deadline_at=1055.0, clock=clock, wait_for=wait,
     ))
-    assert wait.timeouts == [20.0]
+    assert wait.timeouts == [55.0]
 
 
 # ---------------------------------------------------------------------------
@@ -184,12 +195,12 @@ def test_tools_and_second_llm_receive_monotonically_smaller_budgets():
     tool = ToolSpy(clock, consume=2.0)
     asyncio.run(agent.run_agent_turn(
         provider, {}, "m", [], tool,
-        max_tool_calls=5, deadline_at=1020.0, clock=clock, wait_for=wait,
+        max_tool_calls=5, deadline_at=1055.0, clock=clock, wait_for=wait,
     ))
-    assert tool.calls == [("getSiteFairs", 20.0), ("getSiteProjects", 18.0)]
+    assert tool.calls == [("getSiteFairs", 55.0), ("getSiteProjects", 53.0)]
     # wait_for protege LLM1, herramienta a, herramienta b y LLM2; el ultimo
     # timeout es el restante real, sin reinicio del presupuesto.
-    assert wait.timeouts == [20.0, 20.0, 18.0, 16.0]
+    assert wait.timeouts == [55.0, 55.0, 53.0, 51.0]
 
 
 def test_tool_started_with_less_than_one_second_receives_reduced_budget():
@@ -200,16 +211,16 @@ def test_tool_started_with_less_than_one_second_receives_reduced_budget():
     provider = ClockProvider([
         LLMResult(tool_calls=[ToolCall(id="1", name="getSiteFairs", arguments={})], allowed_tools=allowed1),
         LLMResult(content="ok", allowed_tools=allowed2),
-    ], clock, consume=19.4)
+    ], clock, consume=54.4)
     tool = ToolSpy(clock)
     asyncio.run(agent.run_agent_turn(
         provider, {}, "m", [], tool,
-        max_tool_calls=5, deadline_at=1020.0, clock=clock, wait_for=wait,
+        max_tool_calls=5, deadline_at=1055.0, clock=clock, wait_for=wait,
     ))
     assert tool.calls == [("getSiteFairs", pytest.approx(0.6))]
-    # LLM1=20.0, herramienta=0.6 y LLM2=0.6: la herramienta tambien queda
+    # LLM1=55.0, herramienta=0.6 y LLM2=0.6: la herramienta tambien queda
     # acotada por wait_for y el presupuesto no se reinicia.
-    assert wait.timeouts[0] == 20.0
+    assert wait.timeouts[0] == 55.0
     assert wait.timeouts[1] == pytest.approx(0.6)
     assert wait.timeouts[2] == pytest.approx(0.6)
 
@@ -221,11 +232,11 @@ def test_agent_rechecks_deadline_after_each_tool():
     provider = ClockProvider([
         LLMResult(tool_calls=[ToolCall(id="1", name="getSiteFairs", arguments={})], allowed_tools=allowed),
     ], clock)
-    tool = ToolSpy(clock, consume=20.0)
+    tool = ToolSpy(clock, consume=55.0)
     with pytest.raises(AgentError) as error:
         asyncio.run(agent.run_agent_turn(
             provider, {}, "m", [], tool,
-            max_tool_calls=5, deadline_at=1020.0, clock=clock,
+            max_tool_calls=5, deadline_at=1055.0, clock=clock,
         ))
     assert error.value.code == "AI_DEADLINE_EXCEEDED"
     assert len(tool.calls) == 1

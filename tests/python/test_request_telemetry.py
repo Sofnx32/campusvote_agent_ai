@@ -126,7 +126,7 @@ def test_error_payload_never_includes_raw_provider_body(monkeypatch):
 
 def test_deadline_chain_default_is_coherent():
     chain = deadline_chain()
-    assert chain["ai_context_jwt_ttl"] == 60.0
+    assert chain["ai_context_jwt_ttl"] == 90.0
     assert chain["python_agent_deadline"] < chain["node_http_timeout"] < chain["ai_context_jwt_ttl"]
     assert 0 < chain["llm_fallback_budget"] < chain["llm_total_budget"]
     assert validate_deadline_chain() == []

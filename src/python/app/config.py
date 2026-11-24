@@ -68,11 +68,12 @@ class Settings:
     # Minimum time reserved to actually perform the next attempt after a backoff.
     llm_retry_min_next_attempt_seconds: float = field(default_factory=lambda: float(os.getenv("LLM_RETRY_MIN_NEXT_ATTEMPT_SECONDS", "0.5")))
     max_tool_calls: int = field(default_factory=lambda: int(os.getenv("AI_MAX_TOOL_CALLS", "5")))
-    # Coherent with Node `chatTimeoutMs=25s` and AI Context JWT TTL `60s`:
-    # 20s (agent) < 25s (Node HTTP) < 60s (JWT). Never raise this above the
-    # Node timeout without raising `AI_CHAT_TIMEOUT_MS` in the same deploy.
-    agent_deadline_seconds: float = field(default_factory=lambda: float(os.getenv("AI_AGENT_DEADLINE_SECONDS", "28")))
-    tool_timeout_seconds: float = field(default_factory=lambda: float(os.getenv("AI_TOOL_TIMEOUT_SECONDS", "25")))
+    # Cold starts de Render: 55s por debajo del timeout HTTP de Node (60s) y
+    # del TTL del JWT de contexto (90s). Máximos permitidos: 60s y 65s/90s.
+    # El timeout de herramienta baja a 20s para que 1 intento + 1 retry
+    # (20s + 1s + 20s = 41s) quepan dentro del deadline del agente.
+    agent_deadline_seconds: float = field(default_factory=lambda: float(os.getenv("AI_AGENT_DEADLINE_SECONDS", "55")))
+    tool_timeout_seconds: float = field(default_factory=lambda: float(os.getenv("AI_TOOL_TIMEOUT_SECONDS", "20")))
     conversation_max_messages: int = field(default_factory=lambda: int(os.getenv("AI_CONVERSATION_MAX_MESSAGES", "20")))
     conversation_ttl_seconds: int = field(default_factory=lambda: int(os.getenv("AI_CONVERSATION_TTL_SECONDS", "1800")))
     max_history_messages: int = field(default_factory=lambda: int(os.getenv("AI_MAX_HISTORY_MESSAGES", "12")))
@@ -95,6 +96,11 @@ class ConfigurationError(ValueError):
     """Configuración de deadlines/presupuestos imposible o contradictoria."""
 
 
+# Techos de validación. El deadline del agente nunca debe alcanzar el timeout
+# HTTP de Node, y este nunca debe alcanzar el TTL del JWT de contexto.
+MAX_AGENT_DEADLINE_SECONDS = 60.0
+MAX_NODE_HTTP_TIMEOUT_SECONDS = 65.0
+
 # Todos los campos temporales que deben ser estrictamente positivos.
 TIMING_FIELDS = (
     "agent_deadline_seconds",
@@ -116,8 +122,8 @@ def deadline_chain(config: Settings | None = None) -> dict[str, float]:
     desde Python, así que sus valores se leen del entorno.
     """
     cfg = config or settings
-    context_ttl = float(os.getenv("AI_CONTEXT_TTL_SECONDS", "60"))
-    node_http = float(os.getenv("AI_CHAT_TIMEOUT_MS", "30000")) / 1000
+    context_ttl = float(os.getenv("AI_CONTEXT_TTL_SECONDS", "90"))
+    node_http = float(os.getenv("AI_CHAT_TIMEOUT_MS", "60000")) / 1000
     return {
         "ai_context_jwt_ttl": context_ttl,
         "node_http_timeout": node_http,
@@ -145,6 +151,12 @@ def validate_deadline_chain(config: Settings | None = None) -> list[str]:
     for name in ("ai_context_jwt_ttl", "node_http_timeout"):
         if chain[name] <= 0:
             problems.append(f"{name} must be > 0")
+    if chain["python_agent_deadline"] > MAX_AGENT_DEADLINE_SECONDS:
+        problems.append("agent_deadline_seconds must not exceed 60")
+        problems.append("python_agent_deadline must not exceed 60")
+    if chain["node_http_timeout"] > MAX_NODE_HTTP_TIMEOUT_SECONDS:
+        problems.append("AI_CHAT_TIMEOUT_MS must not exceed 65000")
+        problems.append("node_http_timeout must not exceed 65")
     if not chain["python_agent_deadline"] < chain["node_http_timeout"]:
         problems.append("python_agent_deadline must be lower than node_http_timeout")
     if not chain["node_http_timeout"] < chain["ai_context_jwt_ttl"]:
