@@ -56,7 +56,13 @@ async function fetchPythonChat(context, correlationId, conversationId, message) 
       signal,
     });
     const payload = await readJsonResponse(upstream, 'python');
-    if (!upstream.ok) throw new AgentError(payload.error?.code || 'AI_INTERNAL_ERROR', payload.error?.message || 'AI service failed', upstream.status, payload.error?.retryable);
+    if (!upstream.ok) throw new AgentError(
+      payload.error?.code || 'AI_INTERNAL_ERROR',
+      payload.error?.message || 'AI service failed',
+      upstream.status,
+      payload.error?.retryable,
+      { details: payload.error?.details },
+    );
     return payload;
   });
 }

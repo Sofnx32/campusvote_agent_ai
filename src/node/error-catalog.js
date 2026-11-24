@@ -38,6 +38,7 @@ export const PUBLIC_ERROR_MESSAGES = Object.freeze({
   LLM_MODEL_NOT_FOUND: 'El asistente está temporalmente fuera de servicio.',
   LLM_RATE_LIMITED: 'El asistente está recibiendo muchas solicitudes. Inténtalo más tarde.',
   LLM_INVALID_RESPONSE: 'El asistente no pudo procesar una respuesta válida. Inténtalo nuevamente.',
+  AI_RESPONSE_INVALID: 'El asistente no pudo procesar una respuesta válida. Inténtalo nuevamente.',
   RATE_LIMITED: 'El asistente está recibiendo muchas solicitudes. Inténtalo más tarde.',
   PROVIDER_TIMEOUT: 'El asistente tardó demasiado en responder.',
   PROVIDER_UNAVAILABLE: 'El asistente está temporalmente fuera de servicio.',

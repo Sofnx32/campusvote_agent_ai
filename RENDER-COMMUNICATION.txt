@@ -1,0 +1,61 @@
+Comunicación Python <-> Node en Render
+======================================
+
+Topología
+---------
+El repositorio despliega dos servicios web separados, no un único contenedor:
+  - campusvote-agent-ai  -> Python/uvicorn (src/python/Dockerfile)
+  - campusvote-agent-node -> Node (Dockerfile)
+
+Cada imagen inicia un solo proceso. No existe supervisor ni render.yaml en el
+repositorio. Los keep-alives de .github/workflows/keep-alive.yml consultan ambos
+servicios por separado.
+
+Puertos
+-------
+  - Node escucha en PORT o, si no está definida, en 3000
+    (src/node/config.js, src/node/server.js).
+  - Python/uvicorn escucha en PORT o, si no está definida, en 8000
+    (CMD de src/python/Dockerfile). No hay un PYTHON_PORT separado.
+  - Render inyecta PORT en ambos servicios: si ambos reciben el mismo valor,
+    los dos procesos intentan enlazar el mismo puerto. Define las URLs de
+    intercomunicación explícitamente y no dependas de los defaults loopback.
+
+Flujo de una petición con herramientas
+--------------------------------------
+  1. Cliente -> POST /v1/chat en Node.
+  2. Node firma el JWT de contexto y llama a POST /v1/chat en Python usando
+     PYTHON_SERVICE_URL y AI_SERVICE_TOKEN.
+  3. Python ejecuta el LLM y, por cada tool call, hace POST a
+     {NODE_TOOLS_URL}/internal/ai/v1/tools/:tool reenviando el mismo token y
+     el JWT firmado en X-AI-Context.
+  4. Node valida allowlist, firma y replay; las escrituras se guardan como
+     propuesta pendiente y se devuelve "confirmation_required". La ejecución
+     real ocurre en Node cuando el usuario confirma, sin volver por Python.
+
+URLs
+----
+  - PYTHON_SERVICE_URL (Node -> Python): default http://127.0.0.1:8000.
+  - NODE_TOOLS_URL (Python -> Node): default http://127.0.0.1:3000.
+
+  NODE_TOOLS_URL NO debe ser http://127.0.0.1:<puerto_node> en Render. Dentro
+  del contenedor Python, 127.0.0.1 es el propio contenedor Python, de modo que
+  la llamada falla con AI_TOOL_UNAVAILABLE antes de generar la tarjeta de
+  confirmacion. En Render (y en docker-compose.yml) debe apuntar al hostname
+  interno del servicio Node, por ejemplo http://agent-node:3000, o a la URL
+  interna/publica asignada a ese servicio. Lo mismo aplica en sentido inverso:
+  PYTHON_SERVICE_URL debe ser la URL del servicio Python.
+
+  Si ambos procesos compartieran namespace de red, si seria valido usar
+  http://127.0.0.1:<puerto_node>, pero entonces <puerto_node> debe ser el
+  valor real de PORT, no necesariamente 3000.
+
+Errores de respuesta LLM
+------------------------
+  - Los valores de tiempo son: deadline Python 55s (max 60s) < timeout HTTP
+    Node 60000ms (max 65000ms) < TTL del JWT de contexto 90s; tool timeout 20s.
+  - Las variables de Redis se llaman REDIS_URL en codigo y composicion.
+  - AI_RESPONSE_INVALID se expone publicamente como LLM_INVALID_RESPONSE y
+    conserva error.details con reason, failure y tool (sin UUIDs ni secretos).
+  - El parser limpia bloques ```json ... ``` y prosa alrededor del JSON antes
+    de json.loads, y registra la recuperacion en campusvote.forensic.

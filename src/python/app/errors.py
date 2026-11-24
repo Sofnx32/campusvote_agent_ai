@@ -83,6 +83,8 @@ PUBLIC_MESSAGES = {
     "AI_DEADLINE_EXCEEDED": "El asistente tardó demasiado en responder. Inténtalo nuevamente.",
     "LLM_PROVIDER_UNAVAILABLE": "El asistente está temporalmente fuera de servicio.",
     "LLM_INVALID_RESPONSE": "El asistente no pudo procesar una respuesta válida. Inténtalo nuevamente.",
+    # El parser interno usa un código de validación; públicamente es un error de respuesta LLM.
+    "AI_RESPONSE_INVALID": "El asistente no pudo procesar una respuesta válida. Inténtalo nuevamente.",
     # Canonical Phase 1 codes
     "RATE_LIMITED": "El asistente está recibiendo muchas solicitudes. Inténtalo más tarde.",
     "PROVIDER_TIMEOUT": "El asistente tardó demasiado en responder.",
@@ -107,10 +109,13 @@ PUBLIC_MESSAGES = {
 
 def error_payload(error: AgentError, correlation_id: str | None) -> dict:
     fallback = "Ocurrió un problema inesperado." if error.status >= 500 else error.message
+    # El parser interno distingue `AI_RESPONSE_INVALID`; el contrato público
+    # lo expone como `LLM_INVALID_RESPONSE` sin perder `details`.
+    public_code = "LLM_INVALID_RESPONSE" if error.code == "AI_RESPONSE_INVALID" else error.code
     return {
         "success": False,
         "error": {
-            "code": error.code,
+            "code": public_code,
             "message": error.public_message or PUBLIC_MESSAGES.get(error.code, fallback),
             "retryable": error.retryable,
             "requestId": correlation_id,

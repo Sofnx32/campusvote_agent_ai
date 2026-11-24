@@ -6,6 +6,9 @@ services:
     env_file:
       - path: .env
         required: false
+    environment:
+      # En contenedores distintos, loopback apunta al propio contenedor.
+      PYTHON_SERVICE_URL: http://agent-python:8000
     ports:
       - "3001:3000"
     depends_on:
@@ -19,6 +22,8 @@ services:
       - path: .env
         required: false
     environment:
+      # El CMD de la imagen Python usa PORT para uvicorn; .env fija 3000 para Node.
+      PORT: "8000"
       NODE_TOOLS_URL: http://agent-node:3000
     ports:
       - "8000:8000"

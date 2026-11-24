@@ -508,7 +508,14 @@ async def chat(
                         selected_tool_names=announced_tool_names,
                         error_code="AI_RESPONSE_INVALID",
                     )
-                    raise AgentError("AI_RESPONSE_INVALID", "LLM returned no content", 502)
+                    raise AgentError(
+                        "AI_RESPONSE_INVALID", "LLM returned no content", 502,
+                        details={
+                            "reason": "EMPTY_CONTENT",
+                            "finish_reason": None,
+                            "empty_content_reason": invalid_reason,
+                        },
+                    )
         if isinstance(last_action, dict) and last_action.get("status") == "confirmation_required" and last_action.get("tool") == "createFair":
             reply_content = (
                 "Revisa los datos de la feria en la tarjeta. Sube la portada desde aquí; "

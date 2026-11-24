@@ -29,3 +29,17 @@ test('validation errors keep their safe field message and details', () => {
   assert.deepEqual(body.error.details, { field: 'starts_at' });
   assert.equal(JSON.stringify(body).includes('Invalid date'), false);
 });
+
+test('invalid LLM responses keep their exact reason in details and public copy', () => {
+  const error = publicError(new AgentError('AI_RESPONSE_INVALID', 'LLM returned invalid tool arguments', 502, false, {
+    details: { reason: 'INVALID_TOOL_ARGUMENTS_JSON', failure: 'json_decode_error', tool: 'setup_category_with_rubric' },
+  }));
+  const body = errorResponse(error, 'req-502');
+  assert.equal(body.error.code, 'AI_RESPONSE_INVALID');
+  assert.equal(body.error.message, 'El asistente no pudo procesar una respuesta válida. Inténtalo nuevamente.');
+  assert.deepEqual(body.error.details, {
+    reason: 'INVALID_TOOL_ARGUMENTS_JSON',
+    failure: 'json_decode_error',
+    tool: 'setup_category_with_rubric',
+  });
+});
